@@ -49,13 +49,14 @@ npm run test:watch
 - Each item is a checkbox labeled by its text. Check or uncheck to mark done / not done.
 - Filter: **All** (default, including completed) vs **Active** (hides completed).
 - Empty list shows an accessible status: “No todos yet”.
-- Dark zinc / violet UI. Heading: “What needs doing?”
+- Heading: **Your Tasks Completed**. Subtitle: “Add tasks and tick them off.”
+- Earth-tone light theme by default, with a **Dark mode** / **Light mode** toggle at the top of the page.
 
 Not in this app: delete, edit, persistence, a backend, or a Completed-only filter.
 
 ## Tests and CI
 
-Seventeen contract tests in `src/App.test.tsx` cover empty state, adding, marking done, and the All / Active filter. They assert through Testing Library roles (`textbox`, `checkbox`, `radio`, `status`) rather than implementation details.
+Contract tests in `src/App.test.tsx` cover empty state, adding, marking done, the All / Active filter, and the light/dark theme toggle. They assert through Testing Library roles (`textbox`, `checkbox`, `radio`, `status`, `button`) rather than implementation details.
 
 Vitest runs in happy-dom. Setup is `src/test/setup.ts` (`@testing-library/jest-dom` plus cleanup after each test).
 
@@ -72,5 +73,5 @@ Node 20, with the npm cache enabled.
 
 1. Branch from `main`.
 2. `npm install`, then `npm test` before you push.
-3. Keep the contract tests green. If you change add / done / filter behavior, add or update cases in `src/App.test.tsx`.
+3. Keep the contract tests green. If you change add / done / filter / theme behavior, add or update cases in `src/App.test.tsx`.
 4. Open a pull request. CI must pass.
