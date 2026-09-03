@@ -251,3 +251,46 @@ describe("filter", () => {
     expect(empty).toHaveTextContent(/no todos/i);
   });
 });
+
+describe("theme toggle", () => {
+  it("exposes a button to switch theme", () => {
+    render(<App />);
+
+    expect(
+      screen.getByRole("button", { name: /switch to dark mode/i }),
+    ).toBeInTheDocument();
+    expect(document.documentElement).not.toHaveClass("dark");
+    expect(
+      screen.getByRole("region", { name: /light theme/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("switches theme in an accessible way when clicked", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(
+      screen.getByRole("button", { name: /switch to dark mode/i }),
+    );
+
+    expect(document.documentElement).toHaveClass("dark");
+    expect(
+      screen.getByRole("button", { name: /switch to light mode/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: /dark theme/i }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /switch to light mode/i }),
+    );
+
+    expect(document.documentElement).not.toHaveClass("dark");
+    expect(
+      screen.getByRole("button", { name: /switch to dark mode/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: /light theme/i }),
+    ).toBeInTheDocument();
+  });
+});
