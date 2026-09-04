@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useState,
   type FormEvent,
@@ -85,32 +84,44 @@ export default function App() {
     };
   }, []);
 
-  const loadTodos = useCallback(async (userId: string) => {
-    setTodosLoading(true);
-    setError(null);
-    const { data, error: loadError } = await supabase
-      .from("todos")
-      .select("id, text, completed, user_id")
-      .eq("user_id", userId)
-      .order("id", { ascending: true });
-
-    if (loadError) {
-      setError(loadError.message);
-      setTodos([]);
-    } else {
-      setTodos(((data ?? []) as TodoRow[]).map(mapRow));
-    }
-    setTodosLoading(false);
-  }, []);
-
   useEffect(() => {
     if (!user) {
       setTodos([]);
       setTodosLoading(false);
       return;
     }
-    void loadTodos(user.id);
-  }, [user, loadTodos]);
+
+    const requestedUserId = user.id;
+    let cancelled = false;
+
+    async function loadTodosForUser() {
+      setTodosLoading(true);
+      setError(null);
+      const { data, error: loadError } = await supabase
+        .from("todos")
+        .select("id, text, completed, user_id")
+        .eq("user_id", requestedUserId)
+        .order("id", { ascending: true });
+
+      // Ignore stale results if the user signed out or switched accounts
+      // while this request was in flight.
+      if (cancelled) return;
+
+      if (loadError) {
+        setError(loadError.message);
+        setTodos([]);
+      } else {
+        setTodos(((data ?? []) as TodoRow[]).map(mapRow));
+      }
+      setTodosLoading(false);
+    }
+
+    void loadTodosForUser();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   const visibleTodos = todos.filter((todo) => {
     if (filter === "active") return !todo.completed;
@@ -187,6 +198,7 @@ export default function App() {
   }
 
   async function toggleTodo(id: string) {
+    if (!user) return;
     const current = todos.find((todo) => todo.id === id);
     if (!current) return;
 
@@ -195,6 +207,7 @@ export default function App() {
       .from("todos")
       .update({ completed: !current.completed })
       .eq("id", id)
+      .eq("user_id", user.id)
       .select("id, text, completed, user_id")
       .single();
 
@@ -220,7 +233,7 @@ export default function App() {
 
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!editingId) return;
+    if (!user || !editingId) return;
 
     const text = editDraft.trim();
     if (!text) return;
@@ -230,6 +243,7 @@ export default function App() {
       .from("todos")
       .update({ text })
       .eq("id", editingId)
+      .eq("user_id", user.id)
       .select("id, text, completed, user_id")
       .single();
 
@@ -247,11 +261,13 @@ export default function App() {
   }
 
   async function deleteTodo(id: string) {
+    if (!user) return;
     setError(null);
     const { error: deleteError } = await supabase
       .from("todos")
       .delete()
-      .eq("id", id);
+      .eq("id", id)
+      .eq("user_id", user.id);
 
     if (deleteError) {
       setError(deleteError.message);

@@ -286,6 +286,29 @@ describe("auth gate", () => {
     expect(screen.getByText(/signed in as tester@example.com/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /sign out/i })).toBeInTheDocument();
   });
+
+  it("clears the todo list after sign out", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Stay private");
+
+    expect(
+      screen.getByRole("checkbox", { name: "Stay private" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /sign out/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: /email/i }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole("checkbox", { name: "Stay private" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /new todo/i }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("empty state", () => {
