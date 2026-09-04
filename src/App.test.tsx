@@ -294,3 +294,27 @@ describe("theme toggle", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("brand header", () => {
+  it("shows a decorative gbTodo logo mark next to the wordmark", () => {
+    render(<App />);
+
+    const logo = document.querySelector('img[src="/gbtodo-logo.png"]');
+    expect(logo).not.toBeNull();
+    expect(logo).toHaveAttribute("alt", "");
+    expect(screen.queryByRole("img", { name: /gbtodo/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the gbTodo brand name near the header", () => {
+    render(<App />);
+
+    const heading = screen.getByRole("heading", {
+      name: /your tasks completed/i,
+    });
+    expect(heading).toBeInTheDocument();
+    expect(screen.getByText("gbTodo")).toBeInTheDocument();
+    expect(
+      screen.getByText(/add tasks and tick them off/i),
+    ).toBeInTheDocument();
+  });
+});
