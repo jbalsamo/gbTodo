@@ -39,6 +39,11 @@ let authCallback: ((event: string, session: Session | null) => void) | null =
   null;
 let signedIn = true;
 let idCounter = 1;
+/** When set, the next N todo selects wait until the matching resolvers run. */
+let pendingSelectGates: Array<{
+  resolve: (release: () => void) => void;
+  release: (() => void) | null;
+}> = [];
 
 const signInWithOtp = vi.fn();
 const signOut = vi.fn();
@@ -69,13 +74,25 @@ function createFromMock() {
             return builder.thenable();
           },
           thenable() {
-            let rows = [...store];
-            for (const [key, value] of Object.entries(filters)) {
-              rows = rows.filter(
-                (row) => (row as Record<string, unknown>)[key] === value,
-              );
+            const finish = () => {
+              let rows = [...store];
+              for (const [key, value] of Object.entries(filters)) {
+                rows = rows.filter(
+                  (row) => (row as Record<string, unknown>)[key] === value,
+                );
+              }
+              return ok(rows);
+            };
+            const gate = pendingSelectGates.shift();
+            if (!gate) {
+              return finish();
             }
-            return ok(rows);
+            return new Promise((resolve) => {
+              gate.release = () => {
+                resolve(finish());
+              };
+              gate.resolve(gate.release);
+            });
           },
           then(
             onFulfilled: (value: unknown) => unknown,
@@ -253,6 +270,7 @@ beforeEach(() => {
   idCounter = 1;
   authCallback = null;
   signedIn = true;
+  pendingSelectGates = [];
   supabaseTestState.configured = true;
   vi.clearAllMocks();
 });
@@ -695,6 +713,128 @@ describe("brand header", () => {
     expect(
       screen.getByText(/add tasks and tick them off/i),
     ).toBeInTheDocument();
+  });
+});
+
+
+function deferNextSelect() {
+  let releaseFn: (() => void) | null = null;
+  const ready = new Promise<() => void>((resolve) => {
+    pendingSelectGates.push({
+      resolve: (release) => {
+        releaseFn = release;
+        resolve(release);
+      },
+      release: null,
+    });
+  });
+  return {
+    ready,
+    release: () => {
+      if (!releaseFn) {
+        throw new Error("select gate was released before the query started");
+      }
+      releaseFn();
+    },
+  };
+}
+
+describe("todos loading race", () => {
+  it("does not leave Loading todos stuck after a superseded in-flight load", async () => {
+    const first = deferNextSelect();
+    const second = deferNextSelect();
+
+    configureAuth({ signedIn: true });
+    render(<App />);
+
+    // First load is gated — UI should show the loading status.
+    const releaseFirst = await first.ready;
+    expect(await screen.findByText(/loading todos/i)).toBeInTheDocument();
+
+    // Switch accounts while the first request is still in flight so the
+    // todos effect re-runs for a new user id (generation counter race).
+    authCallback?.("SIGNED_IN", {
+      ...mockSession,
+      access_token: "token-user-2",
+      user: {
+        ...mockUser,
+        id: "user-2",
+        email: "other@example.com",
+      },
+    } as Session);
+
+    const releaseSecond = await second.ready;
+
+    // Stale first response settles after being superseded.
+    releaseFirst();
+
+    // Active second request settles with an empty list.
+    store = [];
+    releaseSecond();
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/loading todos/i),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(/no todos/i);
+    expect(
+      screen.getByRole("textbox", { name: /new todo/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/signed in as other@example.com/i),
+    ).toBeInTheDocument();
+  });
+
+  it("clears Loading todos when sign-out cancels an in-flight load", async () => {
+    const first = deferNextSelect();
+    configureAuth({ signedIn: true });
+    render(<App />);
+
+    const releaseFirst = await first.ready;
+    expect(await screen.findByText(/loading todos/i)).toBeInTheDocument();
+
+    authCallback?.("SIGNED_OUT", null);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/loading todos/i)).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("textbox", { name: /email/i }),
+    ).toBeInTheDocument();
+
+    // Stale response must not resurrect the loading state.
+    releaseFirst();
+    await waitFor(() => {
+      expect(screen.queryByText(/loading todos/i)).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("textbox", { name: /email/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not re-fetch todos when auth reports the same user id and token", async () => {
+    configureAuth({ signedIn: true });
+    render(<App />);
+    await screen.findByRole("textbox", { name: /new todo/i });
+    expect(screen.getByRole("status")).toHaveTextContent(/no todos/i);
+
+    const gated = deferNextSelect();
+    authCallback?.("TOKEN_REFRESHED", {
+      ...mockSession,
+      user: { ...mockUser },
+    } as Session);
+
+    // Same access_token + user id → session deduped; todos effect must not
+    // start another select (gate would otherwise be consumed).
+    await waitFor(() => {
+      expect(screen.queryByText(/loading todos/i)).not.toBeInTheDocument();
+    });
+    expect(pendingSelectGates).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent(/no todos/i);
+    // Drop unused gate so later tests are not poisoned if any leak.
+    pendingSelectGates = [];
+    void gated;
   });
 });
 

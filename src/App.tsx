@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -29,6 +30,16 @@ function mapRow(row: TodoRow): Todo {
   };
 }
 
+/** Avoid session state churn when getSession + onAuthStateChange report the same identity. */
+function sessionsEquivalent(a: Session | null, b: Session | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.access_token === b.access_token &&
+    a.user.id === b.user.id
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
@@ -43,6 +54,8 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  /** Bumps when a todos load is superseded so stale responses are ignored. */
+  const todosLoadGenerationRef = useRef(0);
 
   const user: User | null = session?.user ?? null;
 
@@ -66,14 +79,17 @@ export default function App() {
       if (sessionError) {
         setError(sessionError.message);
       }
-      setSession(data.session ?? null);
+      const next = data.session ?? null;
+      setSession((prev) => (sessionsEquivalent(prev, next) ? prev : next));
       setAuthReady(true);
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
+      setSession((prev) =>
+        sessionsEquivalent(prev, nextSession) ? prev : nextSession,
+      );
       setAuthReady(true);
       if (!nextSession) {
         setTodos([]);
@@ -88,16 +104,20 @@ export default function App() {
     };
   }, []);
 
+  // Depend on user id (not the User object) so getSession + onAuthStateChange
+  // identity churn does not re-fetch todos hundreds of times.
+  const userId = user?.id;
+
   useEffect(() => {
-    if (!user || !supabase) {
+    if (!userId || !supabase) {
       setTodos([]);
       setTodosLoading(false);
       return;
     }
 
     const client = supabase;
-    const requestedUserId = user.id;
-    let cancelled = false;
+    const requestedUserId = userId;
+    const requestId = ++todosLoadGenerationRef.current;
 
     async function loadTodosForUser() {
       setTodosLoading(true);
@@ -108,9 +128,14 @@ export default function App() {
         .eq("user_id", requestedUserId)
         .order("id", { ascending: true });
 
-      // Ignore stale results if the user signed out or switched accounts
-      // while this request was in flight.
-      if (cancelled) return;
+      const isCurrent = requestId === todosLoadGenerationRef.current;
+
+      // Ignore stale todos/error if a newer load superseded this one.
+      // Still clear loading only for the active request so we never strand
+      // todosLoading=true after StrictMode/auth churn cancels an in-flight load.
+      if (!isCurrent) {
+        return;
+      }
 
       if (loadError) {
         setError(loadError.message);
@@ -124,9 +149,15 @@ export default function App() {
     void loadTodosForUser();
 
     return () => {
-      cancelled = true;
+      // Invalidate this generation so its response cannot apply todos/error.
+      if (todosLoadGenerationRef.current === requestId) {
+        todosLoadGenerationRef.current += 1;
+      }
+      // Clear loading when abandoning an in-flight load. A successor effect
+      // that starts a new load will set todosLoading true again immediately.
+      setTodosLoading(false);
     };
-  }, [user]);
+  }, [userId]);
 
   const visibleTodos = todos.filter((todo) => {
     if (filter === "active") return !todo.completed;
