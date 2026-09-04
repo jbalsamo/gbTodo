@@ -4,7 +4,7 @@ import {
   type FormEvent,
 } from "react";
 import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type Todo = {
   id: string;
@@ -55,6 +55,10 @@ export default function App() {
   }, [dark]);
 
   useEffect(() => {
+    if (!supabase) {
+      return;
+    }
+
     let cancelled = false;
 
     supabase.auth.getSession().then(({ data, error: sessionError }) => {
@@ -85,19 +89,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || !supabase) {
       setTodos([]);
       setTodosLoading(false);
       return;
     }
 
+    const client = supabase;
     const requestedUserId = user.id;
     let cancelled = false;
 
     async function loadTodosForUser() {
       setTodosLoading(true);
       setError(null);
-      const { data, error: loadError } = await supabase
+      const { data, error: loadError } = await client
         .from("todos")
         .select("id, text, completed, user_id")
         .eq("user_id", requestedUserId)
@@ -133,6 +138,7 @@ export default function App() {
 
   async function handleMagicLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!supabase) return;
     const trimmed = email.trim();
     if (!trimmed) return;
 
@@ -158,6 +164,7 @@ export default function App() {
   }
 
   async function handleSignOut() {
+    if (!supabase) return;
     setAuthBusy(true);
     setError(null);
     const { error: signOutError } = await supabase.auth.signOut();
@@ -172,7 +179,7 @@ export default function App() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!user) return;
+    if (!user || !supabase) return;
 
     const text = draft.trim();
     if (!text) return;
@@ -198,7 +205,7 @@ export default function App() {
   }
 
   async function toggleTodo(id: string) {
-    if (!user) return;
+    if (!user || !supabase) return;
     const current = todos.find((todo) => todo.id === id);
     if (!current) return;
 
@@ -233,7 +240,7 @@ export default function App() {
 
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!user || !editingId) return;
+    if (!user || !editingId || !supabase) return;
 
     const text = editDraft.trim();
     if (!text) return;
@@ -261,7 +268,7 @@ export default function App() {
   }
 
   async function deleteTodo(id: string) {
-    if (!user) return;
+    if (!user || !supabase) return;
     setError(null);
     const { error: deleteError } = await supabase
       .from("todos")
@@ -279,7 +286,7 @@ export default function App() {
   }
 
   async function clearCompleted() {
-    if (!user) return;
+    if (!user || !supabase) return;
     setError(null);
     const { error: deleteError } = await supabase
       .from("todos")
@@ -364,7 +371,14 @@ export default function App() {
               </p>
             </header>
 
-            {!authReady ? (
+            {!isSupabaseConfigured ? (
+              <p
+                role="alert"
+                className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-6 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+              >
+                Supabase is not configured. Copy .env.example to .env.local, set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY, then restart npm run dev.
+              </p>
+            ) : !authReady ? (
               <p
                 role="status"
                 className="rounded-xl border border-dashed border-stone-300 px-4 py-8 text-center text-stone-500 dark:border-stone-700 dark:text-stone-400"

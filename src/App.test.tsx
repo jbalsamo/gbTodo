@@ -162,15 +162,27 @@ function createFromMock() {
   };
 }
 
+const supabaseTestState = vi.hoisted(() => ({
+  configured: true,
+}));
+
 vi.mock("@/lib/supabase", () => ({
-  supabase: {
-    auth: {
-      getSession: (...args: unknown[]) => getSession(...args),
-      onAuthStateChange: (...args: unknown[]) => onAuthStateChange(...args),
-      signInWithOtp: (...args: unknown[]) => signInWithOtp(...args),
-      signOut: (...args: unknown[]) => signOut(...args),
-    },
-    from: (...args: unknown[]) => createFromMock()(...(args as [string])),
+  get isSupabaseConfigured() {
+    return supabaseTestState.configured;
+  },
+  get supabase() {
+    if (!supabaseTestState.configured) {
+      return null;
+    }
+    return {
+      auth: {
+        getSession: (...args: unknown[]) => getSession(...args),
+        onAuthStateChange: (...args: unknown[]) => onAuthStateChange(...args),
+        signInWithOtp: (...args: unknown[]) => signInWithOtp(...args),
+        signOut: (...args: unknown[]) => signOut(...args),
+      },
+      from: (...args: unknown[]) => createFromMock()(...(args as [string])),
+    };
   },
 }));
 
@@ -241,6 +253,7 @@ beforeEach(() => {
   idCounter = 1;
   authCallback = null;
   signedIn = true;
+  supabaseTestState.configured = true;
   vi.clearAllMocks();
 });
 
@@ -682,5 +695,38 @@ describe("brand header", () => {
     expect(
       screen.getByText(/add tasks and tick them off/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe("missing supabase config", () => {
+  it("shows config notice and shell when unconfigured", async () => {
+    supabaseTestState.configured = false;
+    const user = userEvent.setup();
+    render(<App />);
+
+    const notice = await screen.findByRole("alert");
+    expect(notice).toBeTruthy();
+    expect(screen.getByText("gbTodo")).toBeInTheDocument();
+    expect(notice).toHaveTextContent(/supabase is not configured/i);
+    expect(notice).toHaveTextContent(/VITE_SUPABASE_URL/);
+    expect(notice).toHaveTextContent(/VITE_SUPABASE_PUBLISHABLE_KEY/);
+    expect(notice).toHaveTextContent(/npm run dev/);
+    expect(screen.queryByText(/checking session/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /email/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /your tasks completed/i }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /switch to dark mode/i }),
+    );
+    expect(document.documentElement).toHaveClass("dark");
+  });
+
+  it("does not hang on checking session when unconfigured", async () => {
+    supabaseTestState.configured = false;
+    render(<App />);
+    await screen.findByRole("alert");
+    expect(screen.queryByText(/checking session/i)).not.toBeInTheDocument();
   });
 });
