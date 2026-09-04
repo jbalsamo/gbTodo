@@ -296,12 +296,13 @@ describe("theme toggle", () => {
 });
 
 describe("brand header", () => {
-  it("shows the gbTodo logo mark with accessible alt text", () => {
+  it("shows a decorative gbTodo logo mark next to the wordmark", () => {
     render(<App />);
 
-    const logo = screen.getByRole("img", { name: /gbtodo/i });
-    expect(logo).toBeInTheDocument();
-    expect(logo).toHaveAttribute("src", "/gbtodo-logo.png");
+    const logo = document.querySelector('img[src="/gbtodo-logo.png"]');
+    expect(logo).not.toBeNull();
+    expect(logo).toHaveAttribute("alt", "");
+    expect(screen.queryByRole("img", { name: /gbtodo/i })).not.toBeInTheDocument();
   });
 
   it("shows the gbTodo brand name near the header", () => {
