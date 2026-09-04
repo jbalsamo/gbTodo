@@ -71,10 +71,19 @@ export default function App() {
             className="rounded-2xl border border-stone-200 bg-[#faf6f0]/90 p-8 shadow-xl shadow-stone-400/25 backdrop-blur dark:border-orange-950/70 dark:bg-[#2a1c14]/90 dark:shadow-black/40"
           >
             <header className="mb-8">
-              <p className="text-sm font-medium uppercase tracking-[0.2em] text-lime-800 dark:text-amber-400">
-                gbTodo
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-stone-900 sm:text-4xl dark:text-amber-50">
+              <div className="flex items-center gap-3">
+                <img
+                  src="/gbtodo-logo.png"
+                  alt="gbTodo"
+                  width={48}
+                  height={32}
+                  className="h-10 w-auto shrink-0 rounded-lg"
+                />
+                <p className="text-xl font-semibold tracking-tight text-stone-800 dark:text-amber-100">
+                  gbTodo
+                </p>
+              </div>
+              <h1 className="mt-4 text-3xl font-semibold tracking-tight text-stone-900 sm:text-4xl dark:text-amber-50">
                 Your Tasks Completed
               </h1>
               <p className="mt-2 text-stone-600 dark:text-stone-400">
