@@ -1,13 +1,14 @@
 # gbTodo
 
-A small in-browser todo list: add tasks, mark them done, and filter to what is still open. There is no backend and no persistence — todos live in memory for the session.
+A small todo list with Supabase email magic-link auth and cloud-backed CRUD. Earth-tone light/dark theme, Logo A header brand row.
 
-Stack: React 19, Vite, TypeScript, Tailwind CSS. Tests: Vitest + Testing Library.
+Stack: React 19, Vite, TypeScript, Tailwind CSS, @supabase/supabase-js (SPA only). Tests: Vitest + Testing Library (mocked Supabase).
 
 ## Prerequisites
 
-- Node.js 20 (the version GitHub Actions uses)
-- npm (ships with Node)
+- Node.js 20
+- npm
+- Supabase public.todos RLS by user_id; columns id, text, completed, user_id.
 
 ## Setup
 
@@ -15,7 +16,23 @@ Stack: React 19, Vite, TypeScript, Tailwind CSS. Tests: Vitest + Testing Library
 git clone https://github.com/jbalsamo/gbTodo.git
 cd gbTodo
 npm install
+cp .env.example .env.local
 ```
+
+Edit .env.local (never commit it):
+
+```bash
+VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=your_publishable_or_anon_key
+```
+
+Legacy VITE_SUPABASE_ANON_KEY is accepted if PUBLISHABLE_KEY is unset.
+
+### Supabase Auth (dashboard)
+
+1. Authentication -> Providers -> Email enabled.
+2. Authentication -> URL Configuration -> add http://localhost:5173 to Redirect URLs / Site URL.
+3. Confirm email templates / SMTP if magic links do not arrive.
 
 ### Run the app
 
@@ -23,7 +40,7 @@ npm install
 npm run dev
 ```
 
-Vite prints a local URL (usually `http://localhost:5173`). Open it in a browser.
+Vite prints a local URL (usually http://localhost:5173).
 
 ### Tests
 
@@ -31,47 +48,35 @@ Vite prints a local URL (usually `http://localhost:5173`). Open it in a browser.
 npm test
 ```
 
-That runs `vitest run` once. Watch mode:
-
-```bash
-npm run test:watch
-```
+Watch mode: `npm run test:watch`.
 
 ### Other scripts
 
-- `npm run build` — typecheck (`tsc -b`) then production build
-- `npm run preview` — serve the production build
-- `npm run lint` — oxlint
+- `npm run build` - typecheck then production build
+- `npm run preview` - serve the production build
+- `npm run lint` - oxlint
 
 ## Features
 
-- Add a todo from the **New todo** field with **Add** or Enter. Whitespace-only input is ignored; the field clears after a successful add.
-- Each item is a checkbox labeled by its text. Check or uncheck to mark done / not done.
-- Filter: **All** (default, including completed) vs **Active** (hides completed).
-- Empty list shows an accessible status: “No todos yet”.
-- Heading: **Your Tasks Completed**. Subtitle: “Add tasks and tick them off.”
-- Earth-tone light theme by default, with a **Dark mode** / **Light mode** toggle at the top of the page.
+- Auth: email magic link (signInWithOtp) and sign out. Signed-in email shown. Todo CRUD gated behind session.
+- Cloud todos: select/insert/update/delete on public.todos; user_id from session on insert.
+- Add via New todo with Add or Enter. Whitespace-only ignored.
+- Toggle complete; Edit text; Delete item; Clear completed.
+- Filters: All, Active, Completed.
+- Empty/loading/error use status/alert roles.
+- Logo A brand row and earth-tone theme toggle kept.
 
-Not in this app: delete, edit, persistence, a backend, or a Completed-only filter.
+Out of scope: Realtime, shared lists, Google OAuth, anonymous auth, Vercel deploy.
 
 ## Tests and CI
 
-Contract tests in `src/App.test.tsx` cover empty state, adding, marking done, the All / Active filter, and the light/dark theme toggle. They assert through Testing Library roles (`textbox`, `checkbox`, `radio`, `status`, `button`) rather than implementation details.
+Contract tests in src/App.test.tsx cover auth gate, CRUD, filters, theme, brand header. Supabase mocked via vi.mock("@/lib/supabase").
 
-Vitest runs in happy-dom. Setup is `src/test/setup.ts` (`@testing-library/jest-dom` plus cleanup after each test).
-
-GitHub Actions [`.github/workflows/test.yml`](.github/workflows/test.yml) runs on every pull request and on pushes to `main`:
-
-```bash
-npm ci
-npm test
-```
-
-Node 20, with the npm cache enabled.
+GitHub Actions .github/workflows/test.yml runs on PRs and pushes to main.
 
 ## Contributing
 
-1. Branch from `main`.
-2. `npm install`, then `npm test` before you push.
-3. Keep the contract tests green. If you change add / done / filter / theme behavior, add or update cases in `src/App.test.tsx`.
+1. Branch from main.
+2. Install deps, then run tests before push.
+3. Keep contract tests green.
 4. Open a pull request. CI must pass.
