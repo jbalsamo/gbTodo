@@ -74,7 +74,7 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <img
                   src="/gbtodo-logo.png"
-                  alt="gbTodo"
+                  alt=""
                   width={48}
                   height={32}
                   className="h-10 w-auto shrink-0 rounded-lg"
