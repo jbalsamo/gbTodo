@@ -1,14 +1,19 @@
 # gbTodo
 
-A small todo list with Supabase email magic-link auth and cloud-backed CRUD. Earth-tone light/dark theme, Logo A header brand row.
+A multi-user todo list with Supabase email magic-link auth and cloud-backed CRUD. Earth-tone light/dark theme with a Logo A header brand row.
 
-Stack: React 19, Vite, TypeScript, Tailwind CSS, @supabase/supabase-js (SPA only). Tests: Vitest + Testing Library (mocked Supabase).
+Stack: React 19, Vite, TypeScript, Tailwind CSS, `@supabase/supabase-js` (SPA only). Tests: Vitest + Testing Library with a mocked Supabase client.
 
 ## Prerequisites
 
-- Node.js 20
+- Node.js 20 (the version GitHub Actions uses)
 - npm
-- Supabase public.todos RLS by user_id; columns id, text, completed, user_id.
+- A Supabase project named **gbTodo** with:
+  - Email auth enabled
+  - Table `public.todos` with columns `id`, `text`, `completed`, `user_id`
+  - RLS so each user only reads/writes their own rows (`auth.uid() = user_id`)
+
+See `supabase/migrations/20260904_todos_rls.sql` for the documented policy shape.
 
 ## Setup
 
@@ -19,20 +24,22 @@ npm install
 cp .env.example .env.local
 ```
 
-Edit .env.local (never commit it):
+Edit `.env.local` (never commit it):
 
 ```bash
 VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=your_publishable_or_anon_key
 ```
 
-Legacy VITE_SUPABASE_ANON_KEY is accepted if PUBLISHABLE_KEY is unset.
+Values come from the Supabase dashboard under **Project Settings → API**. The legacy name `VITE_SUPABASE_ANON_KEY` is still accepted if `VITE_SUPABASE_PUBLISHABLE_KEY` is unset.
 
 ### Supabase Auth (dashboard)
 
-1. Authentication -> Providers -> Email enabled.
-2. Authentication -> URL Configuration -> add http://localhost:5173 to Redirect URLs / Site URL.
+1. **Authentication → Providers** — enable Email.
+2. **Authentication → URL Configuration** — set Site URL / Redirect URLs to include `http://localhost:5173` (and your deploy origin when you have one).
 3. Confirm email templates / SMTP if magic links do not arrive.
+
+Without step 2, magic-link redirects will fail after you click the email.
 
 ### Run the app
 
@@ -40,7 +47,7 @@ Legacy VITE_SUPABASE_ANON_KEY is accepted if PUBLISHABLE_KEY is unset.
 npm run dev
 ```
 
-Vite prints a local URL (usually http://localhost:5173).
+Vite prints a local URL (usually `http://localhost:5173`). Open it in a browser.
 
 ### Tests
 
@@ -48,35 +55,49 @@ Vite prints a local URL (usually http://localhost:5173).
 npm test
 ```
 
-Watch mode: `npm run test:watch`.
+That runs `vitest run` once. Watch mode:
+
+```bash
+npm run test:watch
+```
 
 ### Other scripts
 
-- `npm run build` - typecheck then production build
-- `npm run preview` - serve the production build
-- `npm run lint` - oxlint
+- `npm run build` — typecheck (`tsc -b`) then production build
+- `npm run preview` — serve the production build
+- `npm run lint` — oxlint
 
 ## Features
 
-- Auth: email magic link (signInWithOtp) and sign out. Signed-in email shown. Todo CRUD gated behind session.
-- Cloud todos: select/insert/update/delete on public.todos; user_id from session on insert.
-- Add via New todo with Add or Enter. Whitespace-only ignored.
-- Toggle complete; Edit text; Delete item; Clear completed.
-- Filters: All, Active, Completed.
-- Empty/loading/error use status/alert roles.
-- Logo A brand row and earth-tone theme toggle kept.
+- **Logo A header** — brand row with `public/gbtodo-logo.png`, heading **Your Tasks Completed**, short subtitle, earth-tone light default, and a light/dark toggle at the top.
+- **Magic-link auth** — enter email, **Send magic link** (`signInWithOtp`), then sign out when done. Signed-in email is shown. Todo CRUD is gated behind a session; signed-out users only see the auth form.
+- **Cloud todos** — select / insert / update / delete on `public.todos`; `user_id` is set from the session on insert.
+- **Add** from **New todo** with **Add** or Enter. Whitespace-only input is ignored.
+- **Toggle** complete via the checkbox labeled by the todo text.
+- **Edit** and **Delete** per item; **Clear completed** when any completed todos exist.
+- **Filters**: All (default), Active, Completed.
+- Empty / loading / error states use accessible `status` / `alert` roles.
 
-Out of scope: Realtime, shared lists, Google OAuth, anonymous auth, Vercel deploy.
+Not in this app yet: Realtime sync, shared lists, Google OAuth, anonymous auth, or Vercel deploy.
 
 ## Tests and CI
 
-Contract tests in src/App.test.tsx cover auth gate, CRUD, filters, theme, brand header. Supabase mocked via vi.mock("@/lib/supabase").
+Contract tests in `src/App.test.tsx` cover the auth gate, empty state, add / mark done, edit / delete / clear completed, All / Active / Completed filters, theme toggle, and the Logo A brand header. Supabase is mocked with `vi.mock("@/lib/supabase")` so tests never hit the network.
 
-GitHub Actions .github/workflows/test.yml runs on PRs and pushes to main.
+Vitest runs in happy-dom. Setup is `src/test/setup.ts`.
+
+GitHub Actions [`.github/workflows/test.yml`](.github/workflows/test.yml) runs on every pull request and on pushes to `main`:
+
+```bash
+npm ci
+npm test
+```
+
+Node 20, with the npm cache enabled.
 
 ## Contributing
 
-1. Branch from main.
-2. Install deps, then run tests before push.
-3. Keep contract tests green.
-4. Open a pull request. CI must pass.
+1. Branch from `main` using `feature/` or `fix/` prefixes. Open a PR into `main` — no direct pushes to `main`.
+2. `npm install`, then `npm test` before you push.
+3. Keep the contract tests green. If you change auth, CRUD, filters, or theme behavior, add or update cases in `src/App.test.tsx`.
+4. CI must pass before merge.
