@@ -3,31 +3,98 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent,
+  type MouseEvent,
 } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
-type Todo = {
+export type TodoPriority = "none" | "low" | "medium" | "high";
+
+export type Todo = {
   id: string;
   text: string;
   completed: boolean;
+  due_date: string | null;
+  priority: TodoPriority;
 };
 
 type Filter = "all" | "active" | "completed";
 
-type TodoRow = {
+export type TodoRow = {
   id: string;
   text: string;
   completed: boolean;
   user_id: string;
+  due_date: string | null;
+  priority: TodoPriority;
 };
 
-function mapRow(row: TodoRow): Todo {
+const TODO_COLUMNS = "id, text, completed, user_id, due_date, priority";
+
+const PRIORITY_RANK: Record<TodoPriority, number> = {
+  none: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+};
+
+const PRIORITY_OPTIONS: TodoPriority[] = ["none", "low", "medium", "high"];
+
+export function mapRow(row: TodoRow): Todo {
   return {
     id: row.id,
     text: row.text,
-    completed: row.completed,
+    completed: Boolean(row.completed),
+    due_date: row.due_date ?? null,
+    priority: row.priority ?? "none",
   };
+}
+
+/** Sort: due_date asc (nulls last), priority high→low, then id. */
+export function compareTodos(a: Todo, b: Todo): number {
+  if (a.due_date !== b.due_date) {
+    if (a.due_date == null) return 1;
+    if (b.due_date == null) return -1;
+    if (a.due_date < b.due_date) return -1;
+    if (a.due_date > b.due_date) return 1;
+  }
+  const byPriority = PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority];
+  if (byPriority !== 0) return byPriority;
+  if (a.id < b.id) return -1;
+  if (a.id > b.id) return 1;
+  return 0;
+}
+
+export function sortTodos(list: Todo[]): Todo[] {
+  return [...list].sort(compareTodos);
+}
+
+/** Local calendar date as YYYY-MM-DD. */
+export function localISODate(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function dueStatus(
+  due_date: string | null,
+  completed: boolean,
+): "overdue" | "due-today" | "due-soon" | null {
+  if (!due_date || completed) return null;
+  const today = localISODate();
+  if (due_date < today) return "overdue";
+  if (due_date === today) return "due-today";
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 2);
+  if (due_date <= localISODate(soon)) return "due-soon";
+  return null;
+}
+
+function priorityLabel(priority: TodoPriority): string {
+  if (priority === "none") return "";
+  return priority.charAt(0).toUpperCase() + priority.slice(1);
 }
 
 /** Avoid session state churn when getSession + onAuthStateChange report the same identity. */
@@ -52,8 +119,10 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [magicLinkStatus, setMagicLinkStatus] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [editDueDate, setEditDueDate] = useState("");
+  const [editPriority, setEditPriority] = useState<TodoPriority>("none");
   /** Bumps when a todos load is superseded so stale responses are ignored. */
   const todosLoadGenerationRef = useRef(0);
 
@@ -94,7 +163,7 @@ export default function App() {
       if (!nextSession) {
         setTodos([]);
         setError(null);
-        setEditingId(null);
+        setExpandedId(null);
       }
     });
 
@@ -124,7 +193,7 @@ export default function App() {
       setError(null);
       const { data, error: loadError } = await client
         .from("todos")
-        .select("id, text, completed, user_id")
+        .select(TODO_COLUMNS)
         .eq("user_id", requestedUserId)
         .order("id", { ascending: true });
 
@@ -159,13 +228,54 @@ export default function App() {
     };
   }, [userId]);
 
-  const visibleTodos = todos.filter((todo) => {
+  const filteredTodos = todos.filter((todo) => {
     if (filter === "active") return !todo.completed;
     if (filter === "completed") return todo.completed;
     return true;
   });
 
+  // Incomplete first (sorted), then completed (sorted) when showing All.
+  const visibleTodos =
+    filter === "all"
+      ? [
+          ...sortTodos(filteredTodos.filter((t) => !t.completed)),
+          ...sortTodos(filteredTodos.filter((t) => t.completed)),
+        ]
+      : sortTodos(filteredTodos);
+
   const hasCompleted = todos.some((todo) => todo.completed);
+
+  function collapseExpanded() {
+    setExpandedId(null);
+    setEditDraft("");
+    setEditDueDate("");
+    setEditPriority("none");
+  }
+
+  function expandTodo(todo: Todo) {
+    setExpandedId(todo.id);
+    setEditDraft(todo.text);
+    setEditDueDate(todo.due_date ?? "");
+    setEditPriority(todo.priority);
+  }
+
+  function handleRowKeyDown(event: KeyboardEvent, todo: Todo) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      expandTodo(todo);
+    }
+  }
+
+  useEffect(() => {
+    if (!expandedId) return;
+    function onKey(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        collapseExpanded();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expandedId]);
 
   async function handleMagicLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -222,8 +332,10 @@ export default function App() {
         text,
         completed: false,
         user_id: user.id,
+        priority: "none",
+        due_date: null,
       })
-      .select("id, text, completed, user_id")
+      .select(TODO_COLUMNS)
       .single();
 
     if (insertError) {
@@ -246,7 +358,7 @@ export default function App() {
       .update({ completed: !current.completed })
       .eq("id", id)
       .eq("user_id", user.id)
-      .select("id, text, completed, user_id")
+      .select(TODO_COLUMNS)
       .single();
 
     if (updateError) {
@@ -259,30 +371,26 @@ export default function App() {
     );
   }
 
-  function startEdit(todo: Todo) {
-    setEditingId(todo.id);
-    setEditDraft(todo.text);
-  }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setEditDraft("");
-  }
-
-  async function saveEdit(event: FormEvent<HTMLFormElement>) {
+  async function saveExpanded(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!user || !editingId || !supabase) return;
+    if (!user || !expandedId || !supabase) return;
 
     const text = editDraft.trim();
     if (!text) return;
 
+    const due_date = editDueDate.trim() === "" ? null : editDueDate.trim();
+
     setError(null);
     const { data, error: updateError } = await supabase
       .from("todos")
-      .update({ text })
-      .eq("id", editingId)
+      .update({
+        text,
+        due_date,
+        priority: editPriority,
+      })
+      .eq("id", expandedId)
       .eq("user_id", user.id)
-      .select("id, text, completed, user_id")
+      .select(TODO_COLUMNS)
       .single();
 
     if (updateError) {
@@ -292,10 +400,10 @@ export default function App() {
 
     setTodos((list) =>
       list.map((todo) =>
-        todo.id === editingId ? mapRow(data as TodoRow) : todo,
+        todo.id === expandedId ? mapRow(data as TodoRow) : todo,
       ),
     );
-    cancelEdit();
+    collapseExpanded();
   }
 
   async function deleteTodo(id: string) {
@@ -313,7 +421,7 @@ export default function App() {
     }
 
     setTodos((list) => list.filter((todo) => todo.id !== id));
-    if (editingId === id) cancelEdit();
+    if (expandedId === id) collapseExpanded();
   }
 
   async function clearCompleted() {
@@ -342,6 +450,41 @@ export default function App() {
         ? "bg-orange-800 text-amber-50 shadow dark:bg-orange-700"
         : "text-stone-600 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-200"
     }`;
+
+  function priorityChipClass(priority: TodoPriority): string {
+    switch (priority) {
+      case "high":
+        return "bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-200";
+      case "medium":
+        return "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200";
+      case "low":
+        return "bg-stone-200 text-stone-700 dark:bg-stone-800 dark:text-stone-300";
+      default:
+        return "";
+    }
+  }
+
+  function dueHintClass(status: ReturnType<typeof dueStatus>): string {
+    if (status === "overdue") {
+      return "text-red-700 dark:text-red-300";
+    }
+    if (status === "due-today" || status === "due-soon") {
+      return "text-orange-800 dark:text-amber-300";
+    }
+    return "text-stone-500 dark:text-stone-400";
+  }
+
+  function dueHintText(
+    due_date: string | null,
+    completed: boolean,
+  ): string | null {
+    if (!due_date) return null;
+    const status = dueStatus(due_date, completed);
+    if (status === "overdue") return "Overdue";
+    if (status === "due-today") return "Due today";
+    if (status === "due-soon") return "Due soon";
+    return due_date;
+  }
 
   return (
     <div className="relative min-h-screen bg-stone-100 text-stone-800 antialiased dark:bg-[#1c120c] dark:text-stone-100">
@@ -566,83 +709,182 @@ export default function App() {
                   </p>
                 ) : (
                   <ul className="mt-6 space-y-2">
-                    {visibleTodos.map((todo) => (
-                      <li key={todo.id}>
-                        {editingId === todo.id ? (
-                          <form
-                            className="flex flex-col gap-2 rounded-xl border border-stone-200 bg-white/80 px-4 py-3 dark:border-stone-800 dark:bg-[#1c120c]/70 sm:flex-row sm:items-center"
-                            onSubmit={saveEdit}
-                          >
-                            <label className="sr-only" htmlFor={`edit-${todo.id}`}>
-                              Edit todo
-                            </label>
-                            <input
-                              id={`edit-${todo.id}`}
-                              value={editDraft}
-                              onChange={(event) =>
-                                setEditDraft(event.target.value)
-                              }
-                              className="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-base text-stone-900 outline-none focus:border-orange-800 focus:ring-2 focus:ring-orange-800/30 dark:border-stone-700 dark:bg-[#1c120c] dark:text-stone-100 dark:focus:border-orange-400"
-                            />
-                            <div className="flex gap-2">
-                              <button
-                                type="submit"
-                                className="rounded-lg bg-orange-800 px-3 py-2 text-sm font-semibold text-amber-50 dark:bg-orange-700"
-                              >
-                                Save
-                              </button>
-                              <button
-                                type="button"
-                                onClick={cancelEdit}
-                                className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 dark:border-stone-600 dark:text-stone-200"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </form>
-                        ) : (
-                          <div
-                            className={`flex items-center gap-2 rounded-xl border border-stone-200 bg-white/80 px-4 py-3 transition hover:border-stone-300 dark:border-stone-800 dark:bg-[#1c120c]/70 dark:hover:border-stone-700 ${
-                              todo.completed ? "opacity-70" : ""
-                            }`}
-                          >
-                            <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                    {visibleTodos.map((todo) => {
+                      const isExpanded = expandedId === todo.id;
+                      const hint = dueHintText(todo.due_date, todo.completed);
+                      const status = dueStatus(todo.due_date, todo.completed);
+                      const chip = priorityLabel(todo.priority);
+
+                      return (
+                        <li key={todo.id}>
+                          {isExpanded ? (
+                            <form
+                              className="flex flex-col gap-3 rounded-xl border border-orange-800/40 bg-white/90 px-4 py-3 dark:border-orange-700/50 dark:bg-[#1c120c]/80"
+                              onSubmit={saveExpanded}
+                              data-testid={`expanded-row-${todo.id}`}
+                            >
+                              <div className="flex items-start gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={todo.completed}
+                                  onChange={() => void toggleTodo(todo.id)}
+                                  aria-label={todo.text}
+                                  className="mt-2.5 size-5 shrink-0 rounded border-stone-400 accent-orange-800 dark:border-stone-600 dark:accent-orange-500"
+                                />
+                                <div className="min-w-0 flex-1 space-y-3">
+                                  <div>
+                                    <label
+                                      className="sr-only"
+                                      htmlFor={`edit-${todo.id}`}
+                                    >
+                                      Edit todo
+                                    </label>
+                                    <input
+                                      id={`edit-${todo.id}`}
+                                      value={editDraft}
+                                      onChange={(event) =>
+                                        setEditDraft(event.target.value)
+                                      }
+                                      className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-base text-stone-900 outline-none focus:border-orange-800 focus:ring-2 focus:ring-orange-800/30 dark:border-stone-700 dark:bg-[#1c120c] dark:text-stone-100 dark:focus:border-orange-400"
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-2 sm:flex-row">
+                                    <div className="min-w-0 flex-1">
+                                      <label
+                                        htmlFor={`due-${todo.id}`}
+                                        className="mb-1 block text-xs font-medium text-stone-600 dark:text-stone-400"
+                                      >
+                                        Due date
+                                      </label>
+                                      <input
+                                        id={`due-${todo.id}`}
+                                        type="date"
+                                        value={editDueDate}
+                                        onChange={(event) =>
+                                          setEditDueDate(event.target.value)
+                                        }
+                                        className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 outline-none focus:border-orange-800 focus:ring-2 focus:ring-orange-800/30 dark:border-stone-700 dark:bg-[#1c120c] dark:text-stone-100 dark:focus:border-orange-400"
+                                      />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <label
+                                        htmlFor={`priority-${todo.id}`}
+                                        className="mb-1 block text-xs font-medium text-stone-600 dark:text-stone-400"
+                                      >
+                                        Priority
+                                      </label>
+                                      <select
+                                        id={`priority-${todo.id}`}
+                                        value={editPriority}
+                                        onChange={(event) =>
+                                          setEditPriority(
+                                            event.target.value as TodoPriority,
+                                          )
+                                        }
+                                        className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 outline-none focus:border-orange-800 focus:ring-2 focus:ring-orange-800/30 dark:border-stone-700 dark:bg-[#1c120c] dark:text-stone-100 dark:focus:border-orange-400"
+                                      >
+                                        {PRIORITY_OPTIONS.map((option) => (
+                                          <option key={option} value={option}>
+                                            {option === "none"
+                                              ? "None"
+                                              : priorityLabel(option)}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    <button
+                                      type="submit"
+                                      className="rounded-lg bg-orange-800 px-3 py-2 text-sm font-semibold text-amber-50 dark:bg-orange-700"
+                                    >
+                                      Save
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={collapseExpanded}
+                                      className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 dark:border-stone-600 dark:text-stone-200"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      aria-label={`Collapse ${todo.text}`}
+                                      onClick={collapseExpanded}
+                                      className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 dark:border-stone-600 dark:text-stone-200"
+                                    >
+                                      Collapse
+                                    </button>
+                                    <button
+                                      type="button"
+                                      aria-label={`Delete ${todo.text}`}
+                                      onClick={() => void deleteTodo(todo.id)}
+                                      className="ml-auto rounded-lg px-3 py-2 text-sm font-medium text-red-800 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700 dark:text-red-300 dark:hover:bg-red-950/40 dark:focus-visible:ring-red-400"
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </form>
+                          ) : (
+                            <div
+                              className={`flex items-center gap-2 rounded-xl border border-stone-200 bg-white/80 px-4 py-3 transition hover:border-stone-300 dark:border-stone-800 dark:bg-[#1c120c]/70 dark:hover:border-stone-700 ${
+                                todo.completed ? "opacity-70" : ""
+                              }`}
+                              data-testid={`compact-row-${todo.id}`}
+                            >
                               <input
                                 type="checkbox"
                                 checked={todo.completed}
                                 onChange={() => void toggleTodo(todo.id)}
+                                aria-label={todo.text}
+                                onClick={(event: MouseEvent) =>
+                                  event.stopPropagation()
+                                }
                                 className="size-5 shrink-0 rounded border-stone-400 accent-orange-800 dark:border-stone-600 dark:accent-orange-500"
                               />
-                              <span
-                                className={`truncate text-base ${
-                                  todo.completed
-                                    ? "text-stone-400 line-through dark:text-stone-500"
-                                    : "text-stone-800 dark:text-stone-100"
-                                }`}
+                              <button
+                                type="button"
+                                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                aria-expanded={false}
+                                aria-label={`Expand ${todo.text}`}
+                                onClick={() => expandTodo(todo)}
+                                onKeyDown={(event) =>
+                                  handleRowKeyDown(event, todo)
+                                }
                               >
-                                {todo.text}
-                              </span>
-                            </label>
-                            <button
-                              type="button"
-                              aria-label={`Edit ${todo.text}`}
-                              onClick={() => startEdit(todo)}
-                              className="shrink-0 rounded-lg px-2 py-1 text-sm font-medium text-stone-600 hover:bg-stone-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-800 dark:text-stone-300 dark:hover:bg-[#3d2a1f] dark:focus-visible:ring-orange-400"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              aria-label={`Delete ${todo.text}`}
-                              onClick={() => void deleteTodo(todo.id)}
-                              className="shrink-0 rounded-lg px-2 py-1 text-sm font-medium text-red-800 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700 dark:text-red-300 dark:hover:bg-red-950/40 dark:focus-visible:ring-red-400"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </li>
-                    ))}
+                                <span
+                                  className={`min-w-0 flex-1 truncate text-base ${
+                                    todo.completed
+                                      ? "text-stone-400 line-through dark:text-stone-500"
+                                      : "text-stone-800 dark:text-stone-100"
+                                  }`}
+                                >
+                                  {todo.text}
+                                </span>
+                                {chip ? (
+                                  <span
+                                    className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${priorityChipClass(todo.priority)}`}
+                                    data-testid={`priority-chip-${todo.id}`}
+                                  >
+                                    {chip}
+                                  </span>
+                                ) : null}
+                                {hint ? (
+                                  <span
+                                    className={`shrink-0 text-xs font-medium ${dueHintClass(status)}`}
+                                    data-testid={`due-hint-${todo.id}`}
+                                  >
+                                    {hint}
+                                  </span>
+                                ) : null}
+                              </button>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </>

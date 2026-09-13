@@ -10,10 +10,10 @@ Stack: React 19, Vite, TypeScript, Tailwind CSS, `@supabase/supabase-js` (SPA on
 - npm
 - A Supabase project named **gbTodo** with:
   - Email auth enabled
-  - Table `public.todos` with columns `id`, `text`, `completed`, `user_id`
+  - Table `public.todos` with columns `id`, `text`, `completed`, `user_id`, `due_date`, `priority`
   - RLS so each user only reads/writes their own rows (`auth.uid() = user_id`)
 
-See `supabase/migrations/20260904_todos_rls.sql` for the documented policy shape.
+See `supabase/migrations/20260904_todos_rls.sql` for the documented policy shape and `supabase/migrations/20260913_todo_due_date_priority.sql` for due date / priority.
 
 ## Setup
 
@@ -91,7 +91,9 @@ After you have a deploy origin, add it to Supabase **Authentication → URL Conf
 - **Cloud todos** — select / insert / update / delete on `public.todos`; `user_id` is set from the session on insert.
 - **Add** from **New todo** with **Add** or Enter. Whitespace-only input is ignored.
 - **Toggle** complete via the checkbox labeled by the todo text.
-- **Edit** and **Delete** per item; **Clear completed** when any completed todos exist.
+- **Due date & priority** — optional `due_date` (YYYY-MM-DD) and `priority` (`none` | `low` | `medium` | `high`). New todos default to `none` / no due date; set them after expand. Incomplete list sorts by due date (soonest first, nulls last), then priority high→low, then id. See `supabase/migrations/20260913_todo_due_date_priority.sql`.
+- **Compact rows** — default row shows checkbox, truncated title, priority chip (if not none), and an overdue/due-soon hint. Click the row (not the checkbox) to expand; expanded view has due date, priority, edit text / save / cancel, and delete. Only one row expands at a time; Escape or Collapse closes it.
+- **Edit** and **Delete** live in the expanded row; **Clear completed** when any completed todos exist.
 - **Filters**: All (default), Active, Completed.
 - Empty / loading / error states use accessible `status` / `alert` roles.
 
