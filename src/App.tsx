@@ -170,10 +170,17 @@ export default function App() {
         sessionsEquivalent(prev, nextSession) ? prev : nextSession,
       );
       setAuthReady(true);
+      // Any-tab SIGNED_OUT / session clear: drop leftover chrome so a
+      // secondary tab does not keep signed-in UI or stale errors.
       if (!nextSession) {
         setTodos([]);
         setError(null);
+        setMagicLinkStatus(null);
+        setDraft((current) => (current ? "" : current));
         setExpandedId(null);
+        setEditDraft("");
+        setEditDueDate("");
+        setEditPriority("none");
       }
     });
 
@@ -319,18 +326,33 @@ export default function App() {
     setAuthBusy(true);
     setError(null);
 
+    const messageFromUnknown = (err: unknown): string => {
+      if (err && typeof err === "object" && "message" in err) {
+        return String((err as { message: unknown }).message);
+      }
+      if (err instanceof Error) {
+        return err.message;
+      }
+      return "Sign out failed";
+    };
+
     let signOutError: { message: string } | null = null;
     try {
-      const result = await supabase.auth.signOut({ scope: "local" });
+      // Prefer global so other tabs receive the auth broadcast.
+      const result = await supabase.auth.signOut();
       signOutError = result.error;
     } catch (err) {
-      const message =
-        err && typeof err === "object" && "message" in err
-          ? String((err as { message: unknown }).message)
-          : err instanceof Error
-            ? err.message
-            : "Sign out failed";
-      signOutError = { message };
+      signOutError = { message: messageFromUnknown(err) };
+    }
+
+    // Missing/expired server session: still clear this tab locally.
+    if (signOutError && isBenignSignOutError(signOutError.message)) {
+      try {
+        const localResult = await supabase.auth.signOut({ scope: "local" });
+        signOutError = localResult.error;
+      } catch (err) {
+        signOutError = { message: messageFromUnknown(err) };
+      }
     }
 
     setAuthBusy(false);
@@ -340,6 +362,7 @@ export default function App() {
     setSession(null);
     setTodos([]);
     setMagicLinkStatus(null);
+    setDraft("");
     collapseExpanded();
 
     if (signOutError && !isBenignSignOutError(signOutError.message)) {

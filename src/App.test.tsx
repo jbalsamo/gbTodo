@@ -49,6 +49,8 @@ let authCallback: ((event: string, session: Session | null) => void) | null =
   null;
 let signedIn = true;
 let idCounter = 1;
+/** When set, the next insert().select().single() fails with this message. */
+let nextInsertError: string | null = null;
 /** When set, the next N todo selects wait until the matching resolvers run. */
 let pendingSelectGates: Array<{
   resolve: (release: () => void) => void;
@@ -119,6 +121,11 @@ function createFromMock() {
           select() {
             return {
               single() {
+                if (nextInsertError) {
+                  const message = nextInsertError;
+                  nextInsertError = null;
+                  return fail(message);
+                }
                 const created: StoreTodo = {
                   id: `todo-${idCounter++}`,
                   text: String(row.text ?? ""),
@@ -285,6 +292,7 @@ beforeEach(() => {
   idCounter = 1;
   authCallback = null;
   signedIn = true;
+  nextInsertError = null;
   pendingSelectGates = [];
   supabaseTestState.configured = true;
   vi.clearAllMocks();
@@ -348,7 +356,8 @@ describe("auth gate", () => {
         screen.getByRole("textbox", { name: /email/i }),
       ).toBeInTheDocument();
     });
-    expect(signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(signOut).toHaveBeenCalledWith();
+    expect(signOut).toHaveBeenCalledTimes(1);
     expect(
       screen.queryByRole("checkbox", { name: "Stay private" }),
     ).not.toBeInTheDocument();
@@ -361,8 +370,10 @@ describe("auth gate", () => {
     const user = await renderSignedIn();
     await addTodo(user, "Stuck session todo");
 
-    signOut.mockImplementation(async () => {
+    signOut.mockImplementation(async (options?: { scope?: string }) => {
       // Simulate missing/expired server session: error without auth callback.
+      // Global fails benignly; local-scope fallback also reports missing.
+      void options;
       return { error: { message: "Auth session missing!" } };
     });
 
@@ -373,7 +384,8 @@ describe("auth gate", () => {
         screen.getByRole("textbox", { name: /email/i }),
       ).toBeInTheDocument();
     });
-    expect(signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(signOut).toHaveBeenNthCalledWith(1);
+    expect(signOut).toHaveBeenNthCalledWith(2, { scope: "local" });
     expect(screen.getByRole("button", { name: /send magic link/i })).toBeInTheDocument();
     expect(
       screen.queryByText(/auth session missing/i),
@@ -390,7 +402,10 @@ describe("auth gate", () => {
     const user = await renderSignedIn();
     await addTodo(user, "Rejected session todo");
 
-    signOut.mockImplementation(async () => {
+    signOut.mockImplementation(async (options?: { scope?: string }) => {
+      if (options?.scope === "local") {
+        return { error: { message: "Auth session missing!" } };
+      }
       throw { message: "Auth session missing!" };
     });
 
@@ -401,13 +416,79 @@ describe("auth gate", () => {
         screen.getByRole("textbox", { name: /email/i }),
       ).toBeInTheDocument();
     });
-    expect(signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(signOut).toHaveBeenNthCalledWith(1);
+    expect(signOut).toHaveBeenNthCalledWith(2, { scope: "local" });
     expect(
       screen.queryByText(/auth session missing/i),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("checkbox", { name: "Rejected session todo" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("clears leftover error and returns to magic-link form on other-tab SIGNED_OUT", async () => {
+    const user = await renderSignedIn();
+
+    nextInsertError = "Auth session missing!";
+    await user.type(
+      screen.getByRole("textbox", { name: /new todo/i }),
+      "Will fail",
+    );
+    await user.click(screen.getByRole("button", { name: /add/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /auth session missing/i,
+    );
+    expect(
+      screen.getByText(/signed in as tester@example.com/i),
+    ).toBeInTheDocument();
+
+    // Simulate auth broadcast from another tab clearing the session.
+    authCallback?.("SIGNED_OUT", null);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: /email/i }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/signed in as/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /new todo/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/auth session missing/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("clears to signed-out UI and shows non-benign signOut errors", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Keep clearing");
+
+    signOut.mockImplementation(async () => {
+      return { error: { message: "Network request failed" } };
+    });
+
+    await user.click(screen.getByRole("button", { name: /sign out/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: /email/i }),
+      ).toBeInTheDocument();
+    });
+    expect(signOut).toHaveBeenCalledWith();
+    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("textbox", { name: /new todo/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/signed in as/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /network request failed/i,
+    );
   });
 });
 
