@@ -356,8 +356,8 @@ describe("auth gate", () => {
         screen.getByRole("textbox", { name: /email/i }),
       ).toBeInTheDocument();
     });
-    expect(signOut).toHaveBeenCalledWith();
-    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(signOut).toHaveBeenNthCalledWith(1);
+    expect(signOut).toHaveBeenNthCalledWith(2, { scope: "local" });
     expect(
       screen.queryByRole("checkbox", { name: "Stay private" }),
     ).not.toBeInTheDocument();
@@ -467,7 +467,10 @@ describe("auth gate", () => {
     const user = await renderSignedIn();
     await addTodo(user, "Keep clearing");
 
-    signOut.mockImplementation(async () => {
+    signOut.mockImplementation(async (options?: { scope?: string }) => {
+      if (options?.scope === "local") {
+        return { error: null };
+      }
       return { error: { message: "Network request failed" } };
     });
 
@@ -478,8 +481,8 @@ describe("auth gate", () => {
         screen.getByRole("textbox", { name: /email/i }),
       ).toBeInTheDocument();
     });
-    expect(signOut).toHaveBeenCalledWith();
-    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(signOut).toHaveBeenNthCalledWith(1);
+    expect(signOut).toHaveBeenNthCalledWith(2, { scope: "local" });
     expect(
       screen.queryByRole("textbox", { name: /new todo/i }),
     ).not.toBeInTheDocument();
