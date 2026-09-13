@@ -107,6 +107,16 @@ function sessionsEquivalent(a: Session | null, b: Session | null): boolean {
   );
 }
 
+/** Missing/expired server session — local sign-out still succeeded. */
+function isBenignSignOutError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("auth session missing") ||
+    normalized.includes("session not found") ||
+    normalized.includes("session from session_id claim in jwt does not exist")
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
@@ -308,14 +318,33 @@ export default function App() {
     if (!supabase) return;
     setAuthBusy(true);
     setError(null);
-    const { error: signOutError } = await supabase.auth.signOut();
-    setAuthBusy(false);
-    if (signOutError) {
-      setError(signOutError.message);
-      return;
+
+    let signOutError: { message: string } | null = null;
+    try {
+      const result = await supabase.auth.signOut({ scope: "local" });
+      signOutError = result.error;
+    } catch (err) {
+      const message =
+        err && typeof err === "object" && "message" in err
+          ? String((err as { message: unknown }).message)
+          : err instanceof Error
+            ? err.message
+            : "Sign out failed";
+      signOutError = { message };
     }
+
+    setAuthBusy(false);
+
+    // Always clear local UI after attempting sign-out so a missing/expired
+    // server session cannot leave the user stuck on the signed-in screen.
+    setSession(null);
     setTodos([]);
     setMagicLinkStatus(null);
+    collapseExpanded();
+
+    if (signOutError && !isBenignSignOutError(signOutError.message)) {
+      setError(signOutError.message);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

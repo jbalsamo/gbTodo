@@ -348,11 +348,65 @@ describe("auth gate", () => {
         screen.getByRole("textbox", { name: /email/i }),
       ).toBeInTheDocument();
     });
+    expect(signOut).toHaveBeenCalledWith({ scope: "local" });
     expect(
       screen.queryByRole("checkbox", { name: "Stay private" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("textbox", { name: /new todo/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("returns to magic-link form when signOut reports Auth session missing", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Stuck session todo");
+
+    signOut.mockImplementation(async () => {
+      // Simulate missing/expired server session: error without auth callback.
+      return { error: { message: "Auth session missing!" } };
+    });
+
+    await user.click(screen.getByRole("button", { name: /sign out/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: /email/i }),
+      ).toBeInTheDocument();
+    });
+    expect(signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(screen.getByRole("button", { name: /send magic link/i })).toBeInTheDocument();
+    expect(
+      screen.queryByText(/auth session missing/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("checkbox", { name: "Stuck session todo" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /new todo/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("returns to magic-link form when signOut rejects with Auth session missing", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Rejected session todo");
+
+    signOut.mockImplementation(async () => {
+      throw { message: "Auth session missing!" };
+    });
+
+    await user.click(screen.getByRole("button", { name: /sign out/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: /email/i }),
+      ).toBeInTheDocument();
+    });
+    expect(signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(
+      screen.queryByText(/auth session missing/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("checkbox", { name: "Rejected session todo" }),
     ).not.toBeInTheDocument();
   });
 });
