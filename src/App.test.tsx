@@ -8,13 +8,23 @@ import {
   vi,
 } from "vitest";
 import type { Session, User } from "@supabase/supabase-js";
-import App from "./App.tsx";
+import App, {
+  compareTodos,
+  mapRow,
+  sortTodos,
+  type Todo,
+  type TodoRow,
+} from "./App.tsx";
+
+type TodoPriority = "none" | "low" | "medium" | "high";
 
 type StoreTodo = {
   id: string;
   text: string;
   completed: boolean;
   user_id: string;
+  due_date: string | null;
+  priority: TodoPriority;
 };
 
 const mockUser: User = {
@@ -114,6 +124,11 @@ function createFromMock() {
                   text: String(row.text ?? ""),
                   completed: Boolean(row.completed),
                   user_id: String(row.user_id ?? ""),
+                  due_date:
+                    row.due_date === undefined
+                      ? null
+                      : (row.due_date as string | null),
+                  priority: (row.priority as TodoPriority | undefined) ?? "none",
                 };
                 store.push(created);
                 return ok(created);
@@ -470,7 +485,7 @@ describe("edit and delete", () => {
     const user = await renderSignedIn();
     await addTodo(user, "Old text");
 
-    await user.click(screen.getByRole("button", { name: /edit old text/i }));
+    await user.click(screen.getByRole("button", { name: /expand old text/i }));
     const editInput = screen.getByRole("textbox", { name: /edit todo/i });
     await user.clear(editInput);
     await user.type(editInput, "New text");
@@ -490,6 +505,7 @@ describe("edit and delete", () => {
     const user = await renderSignedIn();
     await addTodo(user, "Remove me");
 
+    await user.click(screen.getByRole("button", { name: /expand remove me/i }));
     await user.click(
       screen.getByRole("button", { name: /delete remove me/i }),
     );
@@ -835,6 +851,265 @@ describe("todos loading race", () => {
     // Drop unused gate so later tests are not poisoned if any leak.
     pendingSelectGates = [];
     void gated;
+  });
+});
+
+
+
+describe("mapRow and sort", () => {
+  it("maps due_date and priority from a TodoRow", () => {
+    const row: TodoRow = {
+      id: "a",
+      text: "Task",
+      completed: false,
+      user_id: "user-1",
+      due_date: "2026-09-20",
+      priority: "high",
+    };
+    expect(mapRow(row)).toEqual({
+      id: "a",
+      text: "Task",
+      completed: false,
+      due_date: "2026-09-20",
+      priority: "high",
+    });
+  });
+
+  it("defaults missing due_date to null and priority to none", () => {
+    const row = {
+      id: "b",
+      text: "Bare",
+      completed: true,
+      user_id: "user-1",
+      due_date: null,
+      priority: undefined,
+    } as unknown as TodoRow;
+    expect(mapRow(row)).toEqual({
+      id: "b",
+      text: "Bare",
+      completed: true,
+      due_date: null,
+      priority: "none",
+    });
+  });
+
+  it("sorts by due_date asc with nulls last, then priority high→low, then id", () => {
+    const items: Todo[] = [
+      {
+        id: "3",
+        text: "C",
+        completed: false,
+        due_date: null,
+        priority: "high",
+      },
+      {
+        id: "1",
+        text: "A",
+        completed: false,
+        due_date: "2026-09-15",
+        priority: "low",
+      },
+      {
+        id: "2",
+        text: "B",
+        completed: false,
+        due_date: "2026-09-15",
+        priority: "high",
+      },
+      {
+        id: "4",
+        text: "D",
+        completed: false,
+        due_date: "2026-09-10",
+        priority: "none",
+      },
+      {
+        id: "5",
+        text: "E",
+        completed: false,
+        due_date: null,
+        priority: "none",
+      },
+    ];
+    expect(sortTodos(items).map((t) => t.id)).toEqual([
+      "4",
+      "2",
+      "1",
+      "3",
+      "5",
+    ]);
+  });
+
+  it("compareTodos ranks high above none when due dates match", () => {
+    const a: Todo = {
+      id: "a",
+      text: "a",
+      completed: false,
+      due_date: null,
+      priority: "high",
+    };
+    const b: Todo = {
+      id: "b",
+      text: "b",
+      completed: false,
+      due_date: null,
+      priority: "none",
+    };
+    expect(compareTodos(a, b)).toBeLessThan(0);
+  });
+});
+
+describe("compact expand rows", () => {
+  it("hides due date and priority controls until the row is expanded", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Compact me");
+
+    expect(screen.queryByLabelText(/due date/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^priority$/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /edit todo/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /delete compact me/i }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /expand compact me/i }),
+    );
+
+    expect(screen.getByLabelText(/due date/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^priority$/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: /edit todo/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /delete compact me/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("collapses the previous row when another expands", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "First item");
+    await addTodo(user, "Second item");
+
+    await user.click(
+      screen.getByRole("button", { name: /expand first item/i }),
+    );
+    expect(
+      screen.getByRole("textbox", { name: /edit todo/i }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /expand second item/i }),
+    );
+
+    const editInputs = screen.getAllByRole("textbox", { name: /edit todo/i });
+    expect(editInputs).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: /expand first item/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("collapses on Escape", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Escapable");
+
+    await user.click(
+      screen.getByRole("button", { name: /expand escapable/i }),
+    );
+    expect(screen.getByLabelText(/due date/i)).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/due date/i)).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: /expand escapable/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("persists due_date and priority updates through the mock store", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Schedule me");
+
+    expect(store[0].due_date).toBeNull();
+    expect(store[0].priority).toBe("none");
+
+    await user.click(
+      screen.getByRole("button", { name: /expand schedule me/i }),
+    );
+    const dueInput = screen.getByLabelText(/due date/i);
+    await user.clear(dueInput);
+    await user.type(dueInput, "2026-09-20");
+    await user.selectOptions(screen.getByLabelText(/^priority$/i), "high");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(store[0].due_date).toBe("2026-09-20");
+      expect(store[0].priority).toBe("high");
+    });
+
+    expect(screen.getByTestId(`priority-chip-${store[0].id}`)).toHaveTextContent(
+      /high/i,
+    );
+    expect(screen.getByTestId(`due-hint-${store[0].id}`)).toBeInTheDocument();
+  });
+
+  it("sorts visible incomplete todos by due date then priority", async () => {
+    store = [
+      {
+        id: "todo-z",
+        text: "Later low",
+        completed: false,
+        user_id: "user-1",
+        due_date: "2026-09-22",
+        priority: "low",
+      },
+      {
+        id: "todo-a",
+        text: "Soon high",
+        completed: false,
+        user_id: "user-1",
+        due_date: "2026-09-15",
+        priority: "high",
+      },
+      {
+        id: "todo-b",
+        text: "Soon low",
+        completed: false,
+        user_id: "user-1",
+        due_date: "2026-09-15",
+        priority: "low",
+      },
+      {
+        id: "todo-c",
+        text: "No date high",
+        completed: false,
+        user_id: "user-1",
+        due_date: null,
+        priority: "high",
+      },
+    ];
+
+    await renderSignedIn();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("checkbox")).toHaveLength(4);
+    });
+    const items = screen.getAllByRole("checkbox");
+    expect(items[0]).toHaveAccessibleName("Soon high");
+    expect(items[1]).toHaveAccessibleName("Soon low");
+    expect(items[2]).toHaveAccessibleName("Later low");
+    expect(items[3]).toHaveAccessibleName("No date high");
+  });
+
+  it("defaults new todos to priority none and null due_date", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Fresh");
+    expect(store).toHaveLength(1);
+    expect(store[0].priority).toBe("none");
+    expect(store[0].due_date).toBeNull();
   });
 });
 
