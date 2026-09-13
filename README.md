@@ -67,6 +67,23 @@ npm run test:watch
 - `npm run preview` — serve the production build
 - `npm run lint` — oxlint
 
+## Deploy (Vercel)
+
+This is a Vite SPA. [`vercel.json`](vercel.json) rewrites all routes to `/index.html` so deep links work.
+
+- Framework preset: Vite
+- Build: `npm run build`
+- Output: `dist`
+
+Set these on the Vercel project for **Production** and **Preview** (Project Settings → Environment Variables):
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
+
+`VITE_SUPABASE_ANON_KEY` is still accepted as an alias if `VITE_SUPABASE_PUBLISHABLE_KEY` is unset. Vite inlines them at build time, so they must be present for both Production and Preview builds.
+
+After you have a deploy origin, add it to Supabase **Authentication → URL Configuration** (Site URL / Redirect URLs).
+
 ## Features
 
 - **Logo A header** — brand row with `public/gbtodo-logo.png`, heading **Your Tasks Completed**, short subtitle, earth-tone light default, and a light/dark toggle at the top.
@@ -78,7 +95,7 @@ npm run test:watch
 - **Filters**: All (default), Active, Completed.
 - Empty / loading / error states use accessible `status` / `alert` roles.
 
-Not in this app yet: Realtime sync, shared lists, Google OAuth, anonymous auth, or Vercel deploy.
+Not in this app yet: Realtime sync, shared lists, Google OAuth, or anonymous auth.
 
 ## Tests and CI
 
