@@ -336,23 +336,36 @@ export default function App() {
       return "Sign out failed";
     };
 
+    const takeNonBenign = (
+      current: { message: string } | null,
+      next: { message: string } | null,
+    ): { message: string } | null => {
+      if (!next || isBenignSignOutError(next.message)) {
+        return current;
+      }
+      return current ?? next;
+    };
+
     let signOutError: { message: string } | null = null;
     try {
       // Prefer global so other tabs receive the auth broadcast.
       const result = await supabase.auth.signOut();
-      signOutError = result.error;
+      signOutError = takeNonBenign(signOutError, result.error);
     } catch (err) {
-      signOutError = { message: messageFromUnknown(err) };
+      signOutError = takeNonBenign(signOutError, {
+        message: messageFromUnknown(err),
+      });
     }
 
-    // Missing/expired server session: still clear this tab locally.
-    if (signOutError && isBenignSignOutError(signOutError.message)) {
-      try {
-        const localResult = await supabase.auth.signOut({ scope: "local" });
-        signOutError = localResult.error;
-      } catch (err) {
-        signOutError = { message: messageFromUnknown(err) };
-      }
+    // Always wipe this browser's persisted session so reload and other tabs
+    // cannot restore leftover localStorage after any global path.
+    try {
+      const localResult = await supabase.auth.signOut({ scope: "local" });
+      signOutError = takeNonBenign(signOutError, localResult.error);
+    } catch (err) {
+      signOutError = takeNonBenign(signOutError, {
+        message: messageFromUnknown(err),
+      });
     }
 
     setAuthBusy(false);
@@ -365,7 +378,7 @@ export default function App() {
     setDraft("");
     collapseExpanded();
 
-    if (signOutError && !isBenignSignOutError(signOutError.message)) {
+    if (signOutError) {
       setError(signOutError.message);
     }
   }
