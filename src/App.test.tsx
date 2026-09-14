@@ -12,6 +12,7 @@ import App, {
   compareTodos,
   mapRow,
   sortTodos,
+  type ProfileStatus,
   type Todo,
   type TodoRow,
 } from "./App.tsx";
@@ -25,6 +26,13 @@ type StoreTodo = {
   user_id: string;
   due_date: string | null;
   priority: TodoPriority;
+};
+
+type StoreProfile = {
+  id: string;
+  email: string;
+  role: "user" | "admin";
+  status: ProfileStatus;
 };
 
 const mockUser: User = {
@@ -44,7 +52,15 @@ const mockSession: Session = {
   user: mockUser,
 } as Session;
 
+const defaultProfile: StoreProfile = {
+  id: "user-1",
+  email: "tester@example.com",
+  role: "user",
+  status: "approved",
+};
+
 let store: StoreTodo[] = [];
+let profiles: StoreProfile[] = [];
 let authCallback: ((event: string, session: Session | null) => void) | null =
   null;
 let signedIn = true;
@@ -57,7 +73,8 @@ let pendingSelectGates: Array<{
   release: (() => void) | null;
 }> = [];
 
-const signInWithOtp = vi.fn();
+const signInWithPassword = vi.fn();
+const signUp = vi.fn();
 const signOut = vi.fn();
 const getSession = vi.fn();
 const onAuthStateChange = vi.fn();
@@ -70,8 +87,100 @@ function fail(message: string) {
   return Promise.resolve({ data: null, error: { message } });
 }
 
+
+function createRpcMock() {
+  return (
+    fn: string,
+    args: { target_id: string; new_status: ProfileStatus },
+  ) => {
+    if (fn !== "set_profile_status") {
+      return fail(`Unknown rpc ${fn}`);
+    }
+    const index = profiles.findIndex((row) => row.id === args.target_id);
+    if (index < 0) {
+      return fail("Profile not found");
+    }
+    profiles[index] = { ...profiles[index], status: args.new_status };
+    return ok(profiles[index]);
+  };
+}
+
 function createFromMock() {
   return (table: string) => {
+    if (table === "profiles") {
+      return {
+        select(_columns?: string) {
+          const filters: Record<string, unknown> = {};
+          const orders: Array<{ column: string; ascending: boolean }> = [];
+          const finish = () => {
+            let rows = [...profiles];
+            for (const [key, value] of Object.entries(filters)) {
+              rows = rows.filter(
+                (row) => (row as Record<string, unknown>)[key] === value,
+              );
+            }
+            const rank: Record<ProfileStatus, number> = {
+              pending: 0,
+              approved: 1,
+              rejected: 2,
+            };
+            rows.sort((a, b) => {
+              for (const ord of orders) {
+                if (ord.column === "status") {
+                  const diff = rank[a.status] - rank[b.status];
+                  if (diff !== 0) return ord.ascending ? diff : -diff;
+                } else if (ord.column === "email") {
+                  const diff = a.email.localeCompare(b.email);
+                  if (diff !== 0) return ord.ascending ? diff : -diff;
+                }
+              }
+              return a.email.localeCompare(b.email);
+            });
+            return ok(rows);
+          };
+          const builder = {
+            eq(column: string, value: unknown) {
+              filters[column] = value;
+              return builder;
+            },
+            order(column: string, options?: { ascending?: boolean }) {
+              orders.push({
+                column,
+                ascending: options?.ascending ?? true,
+              });
+              return builder;
+            },
+            maybeSingle() {
+              let rows = [...profiles];
+              for (const [key, value] of Object.entries(filters)) {
+                rows = rows.filter(
+                  (row) => (row as Record<string, unknown>)[key] === value,
+                );
+              }
+              return ok(rows[0] ?? null);
+            },
+            single() {
+              let rows = [...profiles];
+              for (const [key, value] of Object.entries(filters)) {
+                rows = rows.filter(
+                  (row) => (row as Record<string, unknown>)[key] === value,
+                );
+              }
+              if (!rows[0]) return fail("Profile not found");
+              return ok(rows[0]);
+            },
+            then(
+              onFulfilled: (value: unknown) => unknown,
+              onRejected?: (reason: unknown) => unknown,
+            ) {
+              return finish().then(onFulfilled, onRejected);
+            },
+          };
+          return builder;
+        },
+      };
+    }
+
     expect(table).toBe("todos");
 
     return {
@@ -217,16 +326,37 @@ vi.mock("@/lib/supabase", () => ({
       auth: {
         getSession: (...args: unknown[]) => getSession(...args),
         onAuthStateChange: (...args: unknown[]) => onAuthStateChange(...args),
-        signInWithOtp: (...args: unknown[]) => signInWithOtp(...args),
+        signInWithPassword: (...args: unknown[]) =>
+          signInWithPassword(...args),
+        signUp: (...args: unknown[]) => signUp(...args),
         signOut: (...args: unknown[]) => signOut(...args),
       },
       from: (...args: unknown[]) => createFromMock()(...(args as [string])),
+      rpc: (...args: unknown[]) =>
+        createRpcMock()(
+          ...(args as [string, { target_id: string; new_status: ProfileStatus }]),
+        ),
     };
   },
 }));
 
-function configureAuth(options: { signedIn?: boolean } = {}) {
+function configureAuth(
+  options: {
+    signedIn?: boolean;
+    profile?: Partial<StoreProfile> | null;
+  } = {},
+) {
   signedIn = options.signedIn ?? true;
+  if (options.profile === null) {
+    profiles = [];
+  } else {
+    profiles = [
+      {
+        ...defaultProfile,
+        ...(options.profile ?? {}),
+      },
+    ];
+  }
   getSession.mockImplementation(() =>
     ok({ session: signedIn ? mockSession : null }),
   );
@@ -240,7 +370,35 @@ function configureAuth(options: { signedIn?: boolean } = {}) {
       },
     };
   });
-  signInWithOtp.mockResolvedValue({ data: {}, error: null });
+  signInWithPassword.mockImplementation(async ({ email, password }) => {
+    void password;
+    signedIn = true;
+    const session = {
+      ...mockSession,
+      user: { ...mockUser, email },
+    } as Session;
+    authCallback?.("SIGNED_IN", session);
+    return { data: { session, user: session.user }, error: null };
+  });
+  signUp.mockImplementation(async ({ email, password }) => {
+    void password;
+    const id = `pending-user-${idCounter++}`;
+    profiles = [
+      ...profiles.filter((row) => row.id !== id && row.email !== email),
+      {
+        id,
+        email,
+        role: "user",
+        status: "pending",
+      },
+    ];
+    // Simulate confirm-email off: return a session immediately.
+    const user = { ...mockUser, id, email } as User;
+    const session = { ...mockSession, user } as Session;
+    signedIn = true;
+    authCallback?.("SIGNED_IN", session);
+    return { data: { session, user }, error: null };
+  });
   signOut.mockImplementation(async () => {
     signedIn = false;
     authCallback?.("SIGNED_OUT", null);
@@ -248,8 +406,10 @@ function configureAuth(options: { signedIn?: boolean } = {}) {
   });
 }
 
-async function renderSignedIn() {
-  configureAuth({ signedIn: true });
+async function renderSignedIn(
+  profile?: Partial<StoreProfile>,
+) {
+  configureAuth({ signedIn: true, profile });
   const user = userEvent.setup();
   render(<App />);
   await screen.findByRole("textbox", { name: /new todo/i });
@@ -260,7 +420,40 @@ async function renderSignedOut() {
   configureAuth({ signedIn: false });
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole("textbox", { name: /email/i });
+  await screen.findByLabelText(/^email$/i);
+  return user;
+}
+
+async function renderPending(status: ProfileStatus = "pending") {
+  configureAuth({
+    signedIn: true,
+    profile: { status, role: "user" },
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByTestId("account-status");
+  return user;
+}
+
+async function renderAdmin(extraProfiles: StoreProfile[] = []) {
+  const adminProfile: StoreProfile = {
+    id: "user-1",
+    email: "graywulf70@gmail.com",
+    role: "admin",
+    status: "approved",
+  };
+  configureAuth({
+    signedIn: true,
+    profile: adminProfile,
+  });
+  profiles = [
+    adminProfile,
+    ...extraProfiles.filter((p) => p.id !== adminProfile.id),
+  ];
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByTestId("admin-panel");
+  await screen.findByRole("textbox", { name: /new todo/i });
   return user;
 }
 
@@ -289,6 +482,7 @@ function getFilterControl() {
 
 beforeEach(() => {
   store = [];
+  profiles = [{ ...defaultProfile }];
   idCounter = 1;
   authCallback = null;
   signedIn = true;
@@ -299,39 +493,65 @@ beforeEach(() => {
 });
 
 describe("auth gate", () => {
-  it("shows the magic-link form when signed out", async () => {
+  it("shows email/password sign-in form when signed out", async () => {
     await renderSignedOut();
 
+    expect(screen.getByLabelText(/^email$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
     expect(
-      screen.getByRole("textbox", { name: /email/i }),
+      screen.getByRole("button", { name: /^sign in$/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /send magic link/i }),
+      screen.getByRole("tab", { name: /register/i }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("textbox", { name: /new todo/i }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /send magic link/i }),
+    ).not.toBeInTheDocument();
   });
 
-  it("sends a magic link for the entered email", async () => {
+  it("signs in with email and password", async () => {
+    const user = await renderSignedOut();
+    profiles = [{ ...defaultProfile }];
+
+    await user.type(screen.getByLabelText(/^email$/i), "tester@example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "secret123");
+    await user.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => {
+      expect(signInWithPassword).toHaveBeenCalledWith({
+        email: "tester@example.com",
+        password: "secret123",
+      });
+    });
+    expect(
+      await screen.findByRole("textbox", { name: /new todo/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("registers a new account with email and password", async () => {
     const user = await renderSignedOut();
 
-    await user.type(
-      screen.getByRole("textbox", { name: /email/i }),
-      "person@example.com",
-    );
+    await user.click(screen.getByRole("tab", { name: /register/i }));
+    await user.type(screen.getByLabelText(/^email$/i), "newbie@example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "secret123");
     await user.click(
-      screen.getByRole("button", { name: /send magic link/i }),
+      screen.getByRole("button", { name: /create account/i }),
     );
 
     await waitFor(() => {
-      expect(signInWithOtp).toHaveBeenCalledWith(
-        expect.objectContaining({
-          email: "person@example.com",
-        }),
-      );
+      expect(signUp).toHaveBeenCalledWith({
+        email: "newbie@example.com",
+        password: "secret123",
+      });
     });
-    expect(screen.getByRole("status")).toHaveTextContent(/check your email/i);
+    // New signup is pending — no todos UI.
+    expect(await screen.findByTestId("account-status")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /new todo/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows signed-in email and sign out when authenticated", async () => {
@@ -352,9 +572,7 @@ describe("auth gate", () => {
     await user.click(screen.getByRole("button", { name: /sign out/i }));
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("textbox", { name: /email/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText(/^email$/i)).toBeInTheDocument();
     });
     expect(signOut).toHaveBeenNthCalledWith(1);
     expect(signOut).toHaveBeenNthCalledWith(2, { scope: "local" });
@@ -366,7 +584,7 @@ describe("auth gate", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("returns to magic-link form when signOut reports Auth session missing", async () => {
+  it("returns to sign-in form when signOut reports Auth session missing", async () => {
     const user = await renderSignedIn();
     await addTodo(user, "Stuck session todo");
 
@@ -380,13 +598,13 @@ describe("auth gate", () => {
     await user.click(screen.getByRole("button", { name: /sign out/i }));
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("textbox", { name: /email/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText(/^email$/i)).toBeInTheDocument();
     });
     expect(signOut).toHaveBeenNthCalledWith(1);
     expect(signOut).toHaveBeenNthCalledWith(2, { scope: "local" });
-    expect(screen.getByRole("button", { name: /send magic link/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^sign in$/i }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText(/auth session missing/i),
     ).not.toBeInTheDocument();
@@ -398,7 +616,7 @@ describe("auth gate", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("returns to magic-link form when signOut rejects with Auth session missing", async () => {
+  it("returns to sign-in form when signOut rejects with Auth session missing", async () => {
     const user = await renderSignedIn();
     await addTodo(user, "Rejected session todo");
 
@@ -412,9 +630,7 @@ describe("auth gate", () => {
     await user.click(screen.getByRole("button", { name: /sign out/i }));
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("textbox", { name: /email/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText(/^email$/i)).toBeInTheDocument();
     });
     expect(signOut).toHaveBeenNthCalledWith(1);
     expect(signOut).toHaveBeenNthCalledWith(2, { scope: "local" });
@@ -426,7 +642,7 @@ describe("auth gate", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("clears leftover error and returns to magic-link form on other-tab SIGNED_OUT", async () => {
+  it("clears leftover error and returns to sign-in form on other-tab SIGNED_OUT", async () => {
     const user = await renderSignedIn();
 
     nextInsertError = "Auth session missing!";
@@ -447,9 +663,7 @@ describe("auth gate", () => {
     authCallback?.("SIGNED_OUT", null);
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("textbox", { name: /email/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText(/^email$/i)).toBeInTheDocument();
     });
     expect(
       screen.queryByText(/signed in as/i),
@@ -477,9 +691,7 @@ describe("auth gate", () => {
     await user.click(screen.getByRole("button", { name: /sign out/i }));
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("textbox", { name: /email/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText(/^email$/i)).toBeInTheDocument();
     });
     expect(signOut).toHaveBeenNthCalledWith(1);
     expect(signOut).toHaveBeenNthCalledWith(2, { scope: "local" });
@@ -492,6 +704,74 @@ describe("auth gate", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       /network request failed/i,
     );
+  });
+});
+
+describe("approval gate", () => {
+  it("blocks todos when profile is pending", async () => {
+    await renderPending("pending");
+
+    expect(screen.getByTestId("account-status")).toHaveTextContent(/pending/i);
+    expect(
+      screen.queryByRole("textbox", { name: /new todo/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+  });
+
+  it("blocks todos when profile is rejected", async () => {
+    await renderPending("rejected");
+
+    expect(screen.getByTestId("account-status")).toHaveTextContent(/rejected/i);
+    expect(
+      screen.queryByRole("textbox", { name: /new todo/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the todo list when approved", async () => {
+    await renderSignedIn({ status: "approved", role: "user" });
+
+    expect(
+      screen.getByRole("textbox", { name: /new todo/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+  });
+});
+
+describe("admin panel", () => {
+  it("lets an admin approve a pending profile", async () => {
+    const pending: StoreProfile = {
+      id: "user-pending",
+      email: "waiter@example.com",
+      role: "user",
+      status: "pending",
+    };
+    const user = await renderAdmin([pending]);
+
+    expect(screen.getByTestId("admin-panel")).toBeInTheDocument();
+    expect(
+      await screen.findByText("waiter@example.com"),
+    ).toBeInTheDocument();
+
+    const row = screen.getByTestId("admin-profile-user-pending");
+    await user.click(
+      within(row).getByRole("button", { name: /^approve$/i }),
+    );
+
+    await waitFor(() => {
+      expect(profiles.find((p) => p.id === "user-pending")?.status).toBe(
+        "approved",
+      );
+    });
+    expect(within(row).getByText(/approved/i)).toBeInTheDocument();
+  });
+
+  it("hides admin UI for non-admin users", async () => {
+    await renderSignedIn({ role: "user", status: "approved" });
+
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /admin approval/i }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -899,6 +1179,15 @@ describe("todos loading race", () => {
     const second = deferNextSelect();
 
     configureAuth({ signedIn: true });
+    profiles = [
+      { ...defaultProfile },
+      {
+        id: "user-2",
+        email: "other@example.com",
+        role: "user",
+        status: "approved",
+      },
+    ];
     render(<App />);
 
     // First load is gated — UI should show the loading status.
