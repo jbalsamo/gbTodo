@@ -485,12 +485,10 @@ export default function App() {
   ) {
     if (!supabase || !isAdmin) return;
     setError(null);
-    const { data, error: updateError } = await supabase
-      .from("profiles")
-      .update({ status })
-      .eq("id", profileId)
-      .select(PROFILE_COLUMNS)
-      .single();
+    const { data, error: updateError } = await supabase.rpc(
+      "set_profile_status",
+      { target_id: profileId, new_status: status },
+    );
 
     if (updateError) {
       setError(updateError.message);

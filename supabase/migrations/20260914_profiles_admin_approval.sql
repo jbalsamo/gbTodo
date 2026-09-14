@@ -7,6 +7,8 @@
 --   - Trigger creates profile on signup; graywulf70@gmail.com → admin + approved
 --   - Existing users backfilled approved; new signups default pending
 --   - Helpers is_approved(), is_admin(); todos RLS requires approved
+--   - No client UPDATE on profiles: dropped profiles_update_admin (and profiles_update_admin_status);
+--     admins change status only via security definer RPC set_profile_status(target_id, new_status)
 --   - Confirm email disabled separately in Auth settings (no magic-mail needed)
 --
 -- Idempotent: safe to re-apply; does not DROP TABLE with CASCADE on user data.
@@ -54,7 +56,8 @@ ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON TABLE public.profiles FROM anon;
 REVOKE ALL ON TABLE public.profiles FROM PUBLIC;
-GRANT SELECT, UPDATE ON TABLE public.profiles TO authenticated;
+-- SELECT only: status changes go through set_profile_status (SECURITY DEFINER), not table UPDATE.
+GRANT SELECT ON TABLE public.profiles TO authenticated;
 
 -- Helpers used by RLS (security definer so policies can call them safely)
 CREATE OR REPLACE FUNCTION public.is_approved()
@@ -102,13 +105,48 @@ CREATE POLICY profiles_select_own_or_admin
     OR public.is_admin()
   );
 
+-- Drop broad admin UPDATE policies (they allowed rewriting any column, including role).
+DROP POLICY IF EXISTS profiles_update_admin ON public.profiles;
 DROP POLICY IF EXISTS profiles_update_admin_status ON public.profiles;
-CREATE POLICY profiles_update_admin_status
-  ON public.profiles
-  FOR UPDATE
-  TO authenticated
-  USING (public.is_admin())
-  WITH CHECK (public.is_admin());
+
+-- Admins approve/reject via RPC only (status column; cannot escalate role).
+CREATE OR REPLACE FUNCTION public.set_profile_status(
+  target_id uuid,
+  new_status public.profile_status
+)
+RETURNS public.profiles
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  updated_row public.profiles;
+BEGIN
+  IF NOT public.is_admin() THEN
+    RAISE EXCEPTION 'not authorized';
+  END IF;
+
+  IF new_status IS DISTINCT FROM 'approved'::public.profile_status
+     AND new_status IS DISTINCT FROM 'rejected'::public.profile_status THEN
+    RAISE EXCEPTION 'invalid status';
+  END IF;
+
+  UPDATE public.profiles
+  SET status = new_status,
+      updated_at = now()
+  WHERE id = target_id
+  RETURNING * INTO updated_row;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'profile not found';
+  END IF;
+
+  RETURN updated_row;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.set_profile_status(uuid, public.profile_status) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.set_profile_status(uuid, public.profile_status) TO authenticated;
 
 -- No client INSERT: profiles are created only by the signup trigger.
 DROP POLICY IF EXISTS profiles_insert_none ON public.profiles;

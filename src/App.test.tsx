@@ -87,6 +87,24 @@ function fail(message: string) {
   return Promise.resolve({ data: null, error: { message } });
 }
 
+
+function createRpcMock() {
+  return (
+    fn: string,
+    args: { target_id: string; new_status: ProfileStatus },
+  ) => {
+    if (fn !== "set_profile_status") {
+      return fail(`Unknown rpc ${fn}`);
+    }
+    const index = profiles.findIndex((row) => row.id === args.target_id);
+    if (index < 0) {
+      return fail("Profile not found");
+    }
+    profiles[index] = { ...profiles[index], status: args.new_status };
+    return ok(profiles[index]);
+  };
+}
+
 function createFromMock() {
   return (table: string) => {
     if (table === "profiles") {
@@ -156,33 +174,6 @@ function createFromMock() {
               onRejected?: (reason: unknown) => unknown,
             ) {
               return finish().then(onFulfilled, onRejected);
-            },
-          };
-          return builder;
-        },
-        update(patch: Partial<StoreProfile>) {
-          const filters: Record<string, unknown> = {};
-          const builder = {
-            eq(column: string, value: unknown) {
-              filters[column] = value;
-              return builder;
-            },
-            select() {
-              return {
-                single() {
-                  const index = profiles.findIndex((row) =>
-                    Object.entries(filters).every(
-                      ([key, value]) =>
-                        (row as Record<string, unknown>)[key] === value,
-                    ),
-                  );
-                  if (index < 0) {
-                    return fail("Profile not found");
-                  }
-                  profiles[index] = { ...profiles[index], ...patch };
-                  return ok(profiles[index]);
-                },
-              };
             },
           };
           return builder;
@@ -341,6 +332,10 @@ vi.mock("@/lib/supabase", () => ({
         signOut: (...args: unknown[]) => signOut(...args),
       },
       from: (...args: unknown[]) => createFromMock()(...(args as [string])),
+      rpc: (...args: unknown[]) =>
+        createRpcMock()(
+          ...(args as [string, { target_id: string; new_status: ProfileStatus }]),
+        ),
     };
   },
 }));
