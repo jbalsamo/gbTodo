@@ -17,6 +17,7 @@ export type Todo = {
   completed: boolean;
   due_date: string | null;
   priority: TodoPriority;
+  notes: string | null;
 };
 
 type Filter = "all" | "active" | "completed";
@@ -28,6 +29,7 @@ export type TodoRow = {
   user_id: string;
   due_date: string | null;
   priority: TodoPriority;
+  notes: string | null;
 };
 
 export type ProfileRole = "user" | "admin";
@@ -40,7 +42,7 @@ export type Profile = {
   status: ProfileStatus;
 };
 
-const TODO_COLUMNS = "id, text, completed, user_id, due_date, priority";
+const TODO_COLUMNS = "id, text, completed, user_id, due_date, priority, notes";
 const PROFILE_COLUMNS = "id, email, role, status";
 
 const PRIORITY_RANK: Record<TodoPriority, number> = {
@@ -59,6 +61,7 @@ export function mapRow(row: TodoRow): Todo {
     completed: Boolean(row.completed),
     due_date: row.due_date ?? null,
     priority: row.priority ?? "none",
+    notes: row.notes ?? null,
   };
 }
 
@@ -151,6 +154,11 @@ export default function App() {
   const [editDraft, setEditDraft] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
   const [editPriority, setEditPriority] = useState<TodoPriority>("none");
+  const [notesTodoId, setNotesTodoId] = useState<string | null>(null);
+  const [notesDraft, setNotesDraft] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
+  const notesTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const notesDialogRef = useRef<HTMLDivElement | null>(null);
   /** Bumps when a todos load is superseded so stale responses are ignored. */
   const todosLoadGenerationRef = useRef(0);
   const profileLoadGenerationRef = useRef(0);
@@ -395,7 +403,20 @@ export default function App() {
 
   const hasCompleted = todos.some((todo) => todo.completed);
 
+  function closeNotesModal() {
+    setNotesTodoId(null);
+    setNotesDraft("");
+    setNotesSaving(false);
+  }
+
+  function openNotesModal(todo: Todo) {
+    setNotesTodoId(todo.id);
+    setNotesDraft(todo.notes ?? "");
+    setNotesSaving(false);
+  }
+
   function collapseExpanded() {
+    closeNotesModal();
     setExpandedId(null);
     setEditDraft("");
     setEditDueDate("");
@@ -403,6 +424,7 @@ export default function App() {
   }
 
   function expandTodo(todo: Todo) {
+    closeNotesModal();
     setExpandedId(todo.id);
     setEditDraft(todo.text);
     setEditDueDate(todo.due_date ?? "");
@@ -417,9 +439,69 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!expandedId) return;
+    if (!notesTodoId) return;
+
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const dialog = notesDialogRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    // Defer so the dialog nodes are mounted and focusable.
+    const focusTimer = window.setTimeout(() => {
+      notesTextareaRef.current?.focus();
+    }, 0);
+
+    function focusableInDialog(): HTMLElement[] {
+      if (!dialog) return [];
+      const selector =
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+      return Array.from(dialog.querySelectorAll<HTMLElement>(selector)).filter(
+        (el) => !el.hasAttribute("disabled") && el.tabIndex !== -1,
+      );
+    }
+
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Tab") return;
+      const focusables = focusableInDialog();
+      if (focusables.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey) {
+        if (active === first || (dialog && !dialog.contains(active))) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || (dialog && !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus?.();
+    };
+  }, [notesTodoId]);
+
+  useEffect(() => {
+    if (!expandedId && !notesTodoId) return;
     function onKey(event: globalThis.KeyboardEvent) {
       if (event.key !== "Escape") return;
+      if (notesTodoId) {
+        event.preventDefault();
+        closeNotesModal();
+        return;
+      }
       const active = document.activeElement;
       // Let Escape dismiss a native date picker first; collapse only otherwise.
       if (
@@ -432,7 +514,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [expandedId]);
+  }, [expandedId, notesTodoId]);
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -481,11 +563,25 @@ export default function App() {
     setPassword("");
   }
 
+  function sortAdminProfiles(list: Profile[]): Profile[] {
+    const rank: Record<ProfileStatus, number> = {
+      pending: 0,
+      approved: 1,
+      rejected: 2,
+    };
+    return [...list].sort((a, b) => {
+      const byStatus = rank[a.status] - rank[b.status];
+      if (byStatus !== 0) return byStatus;
+      return a.email.localeCompare(b.email);
+    });
+  }
+
   async function updateProfileStatus(
     profileId: string,
     status: Extract<ProfileStatus, "approved" | "rejected">,
   ) {
     if (!supabase || !isAdmin) return;
+    if (user && profileId === user.id) return;
     setError(null);
     const { data, error: updateError } = await supabase.rpc(
       "set_profile_status",
@@ -498,22 +594,70 @@ export default function App() {
     }
 
     const updated = data as Profile;
-    setAdminProfiles((list) => {
-      const next = list.map((row) => (row.id === profileId ? updated : row));
-      const rank: Record<ProfileStatus, number> = {
-        pending: 0,
-        approved: 1,
-        rejected: 2,
-      };
-      return [...next].sort((a, b) => {
-        const byStatus = rank[a.status] - rank[b.status];
-        if (byStatus !== 0) return byStatus;
-        return a.email.localeCompare(b.email);
-      });
-    });
+    setAdminProfiles((list) =>
+      sortAdminProfiles(
+        list.map((row) => (row.id === profileId ? updated : row)),
+      ),
+    );
     if (profile?.id === profileId) {
       setProfile(updated);
     }
+  }
+
+  async function updateProfileRole(
+    profileId: string,
+    newRole: ProfileRole,
+  ) {
+    if (!supabase || !isAdmin) return;
+    if (user && profileId === user.id) return;
+    setError(null);
+    const { data, error: updateError } = await supabase.rpc(
+      "set_profile_role",
+      { target_id: profileId, new_role: newRole },
+    );
+
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+
+    const updated = data as Profile;
+    setAdminProfiles((list) =>
+      sortAdminProfiles(
+        list.map((row) => (row.id === profileId ? updated : row)),
+      ),
+    );
+    if (profile?.id === profileId) {
+      setProfile(updated);
+    }
+  }
+
+  async function saveNotes() {
+    if (!user || !supabase || !isApproved || !notesTodoId || notesSaving) return;
+    setNotesSaving(true);
+    setError(null);
+    const trimmed = notesDraft.trim();
+    const notesValue = trimmed === "" ? null : trimmed;
+    const { data, error: updateError } = await supabase
+      .from("todos")
+      .update({ notes: notesValue })
+      .eq("id", notesTodoId)
+      .eq("user_id", user.id)
+      .select(TODO_COLUMNS)
+      .single();
+
+    if (updateError) {
+      setError(updateError.message);
+      setNotesSaving(false);
+      return;
+    }
+
+    setTodos((list) =>
+      list.map((todo) =>
+        todo.id === notesTodoId ? mapRow(data as TodoRow) : todo,
+      ),
+    );
+    closeNotesModal();
   }
 
   async function handleSignOut() {
@@ -1007,10 +1151,14 @@ export default function App() {
                                 {row.role} · {row.status}
                               </p>
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex flex-wrap gap-2">
                               <button
                                 type="button"
-                                disabled={row.status === "approved"}
+                                data-testid={`approve-${row.id}`}
+                                disabled={
+                                  row.status === "approved" ||
+                                  (user != null && row.id === user.id)
+                                }
                                 onClick={() =>
                                   void updateProfileStatus(row.id, "approved")
                                 }
@@ -1020,7 +1168,11 @@ export default function App() {
                               </button>
                               <button
                                 type="button"
-                                disabled={row.status === "rejected"}
+                                data-testid={`reject-${row.id}`}
+                                disabled={
+                                  row.status === "rejected" ||
+                                  (user != null && row.id === user.id)
+                                }
                                 onClick={() =>
                                   void updateProfileStatus(row.id, "rejected")
                                 }
@@ -1028,6 +1180,32 @@ export default function App() {
                               >
                                 Reject
                               </button>
+                              {row.status === "approved" ? (
+                                row.role === "admin" ? (
+                                  <button
+                                    type="button"
+                                    data-testid={`remove-admin-${row.id}`}
+                                    disabled={user != null && row.id === user.id}
+                                    onClick={() =>
+                                      void updateProfileRole(row.id, "user")
+                                    }
+                                    className="rounded-lg border border-stone-300 px-3 py-1.5 text-xs font-semibold text-stone-700 disabled:opacity-40 dark:border-stone-600 dark:text-stone-200"
+                                  >
+                                    Remove admin
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    data-testid={`make-admin-${row.id}`}
+                                    onClick={() =>
+                                      void updateProfileRole(row.id, "admin")
+                                    }
+                                    className="rounded-lg border border-orange-800/40 px-3 py-1.5 text-xs font-semibold text-orange-900 dark:border-orange-700/50 dark:text-amber-100"
+                                  >
+                                    Make admin
+                                  </button>
+                                )
+                              ) : null}
                             </div>
                           </li>
                         ))}
@@ -1237,6 +1415,14 @@ export default function App() {
                                     </button>
                                     <button
                                       type="button"
+                                      data-testid={`notes-button-${todo.id}`}
+                                      onClick={() => openNotesModal(todo)}
+                                      className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 dark:border-stone-600 dark:text-stone-200"
+                                    >
+                                      Notes
+                                    </button>
+                                    <button
+                                      type="button"
                                       aria-label={`Delete ${todo.text}`}
                                       onClick={() => void deleteTodo(todo.id)}
                                       className="ml-auto rounded-lg px-3 py-2 text-sm font-medium text-red-800 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700 dark:text-red-300 dark:hover:bg-red-950/40 dark:focus-visible:ring-red-400"
@@ -1303,6 +1489,14 @@ export default function App() {
                                     {hint}
                                   </span>
                                 ) : null}
+                                {todo.notes ? (
+                                  <span
+                                    className="size-1.5 shrink-0 rounded-full bg-orange-700/80 dark:bg-orange-400/80"
+                                    data-testid={`notes-indicator-${todo.id}`}
+                                    title="Has notes"
+                                    aria-hidden="true"
+                                  />
+                                ) : null}
                               </button>
                             </div>
                           )}
@@ -1316,6 +1510,69 @@ export default function App() {
           </section>
         </main>
       </div>
+
+      {notesTodoId ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          data-testid="notes-modal-root"
+        >
+          <button
+            type="button"
+            aria-label="Close notes"
+            data-testid="notes-modal-backdrop"
+            tabIndex={-1}
+            className="absolute inset-0 bg-stone-900/50 dark:bg-black/60"
+            onClick={closeNotesModal}
+          />
+          <div
+            ref={notesDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notes-modal-title"
+            data-testid="notes-modal"
+            className="relative z-10 w-full max-w-lg rounded-2xl border border-stone-200 bg-white p-5 shadow-xl dark:border-stone-700 dark:bg-[#1c120c]"
+          >
+            <h2
+              id="notes-modal-title"
+              className="text-lg font-semibold text-stone-900 dark:text-amber-50"
+            >
+              Notes
+            </h2>
+            <label htmlFor="notes-textarea" className="sr-only">
+              Todo notes
+            </label>
+            <textarea
+              id="notes-textarea"
+              ref={notesTextareaRef}
+              data-testid="notes-textarea"
+              value={notesDraft}
+              onChange={(event) => setNotesDraft(event.target.value)}
+              rows={6}
+              className="mt-3 w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 outline-none focus:border-orange-800 focus:ring-2 focus:ring-orange-800/30 dark:border-stone-700 dark:bg-[#2a1c14] dark:text-stone-100 dark:focus:border-orange-400"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                data-testid="notes-cancel"
+                onClick={closeNotesModal}
+                disabled={notesSaving}
+                className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 disabled:opacity-60 dark:border-stone-600 dark:text-stone-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="notes-save"
+                onClick={() => void saveNotes()}
+                disabled={notesSaving}
+                className="rounded-lg bg-orange-800 px-3 py-2 text-sm font-semibold text-amber-50 disabled:opacity-60 dark:bg-orange-700"
+              >
+                {notesSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

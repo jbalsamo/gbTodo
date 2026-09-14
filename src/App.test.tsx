@@ -26,6 +26,7 @@ type StoreTodo = {
   user_id: string;
   due_date: string | null;
   priority: TodoPriority;
+  notes: string | null;
 };
 
 type StoreProfile = {
@@ -88,20 +89,66 @@ function fail(message: string) {
 }
 
 
+function approvedAdminCount() {
+  return profiles.filter(
+    (row) => row.role === "admin" && row.status === "approved",
+  ).length;
+}
+
 function createRpcMock() {
   return (
     fn: string,
-    args: { target_id: string; new_status: ProfileStatus },
+    args: {
+      target_id: string;
+      new_status?: ProfileStatus;
+      new_role?: "user" | "admin";
+    },
   ) => {
-    if (fn !== "set_profile_status") {
-      return fail(`Unknown rpc ${fn}`);
+    if (fn === "set_profile_status") {
+      if (args.target_id === mockUser.id) {
+        return fail("cannot change own status");
+      }
+      const index = profiles.findIndex((row) => row.id === args.target_id);
+      if (index < 0) {
+        return fail("Profile not found");
+      }
+      const target = profiles[index];
+      const newStatus = args.new_status as ProfileStatus;
+      // Mirrors DB last-admin guard (race covered in SQL via FOR UPDATE).
+      if (
+        target.role === "admin" &&
+        target.status === "approved" &&
+        newStatus !== "approved" &&
+        approvedAdminCount() <= 1
+      ) {
+        return fail("cannot change status of last approved admin");
+      }
+      profiles[index] = { ...profiles[index], status: newStatus };
+      return ok(profiles[index]);
     }
-    const index = profiles.findIndex((row) => row.id === args.target_id);
-    if (index < 0) {
-      return fail("Profile not found");
+    if (fn === "set_profile_role") {
+      if (args.target_id === mockUser.id) {
+        return fail("cannot change own role");
+      }
+      const index = profiles.findIndex((row) => row.id === args.target_id);
+      if (index < 0) {
+        return fail("Profile not found");
+      }
+      if (profiles[index].status !== "approved") {
+        return fail("target must be approved");
+      }
+      const newRole = args.new_role as "user" | "admin";
+      if (
+        profiles[index].role === "admin" &&
+        newRole !== "admin" &&
+        approvedAdminCount() <= 1
+      ) {
+        return fail("cannot demote last approved admin");
+      }
+      profiles[index] = { ...profiles[index], role: newRole };
+      return ok(profiles[index]);
     }
-    profiles[index] = { ...profiles[index], status: args.new_status };
-    return ok(profiles[index]);
+    return fail(`Unknown rpc ${fn}`);
   };
 }
 
@@ -245,6 +292,10 @@ function createFromMock() {
                       ? null
                       : (row.due_date as string | null),
                   priority: (row.priority as TodoPriority | undefined) ?? "none",
+                  notes:
+                    row.notes === undefined
+                      ? null
+                      : (row.notes as string | null),
                 };
                 store.push(created);
                 return ok(created);
@@ -334,7 +385,14 @@ vi.mock("@/lib/supabase", () => ({
       from: (...args: unknown[]) => createFromMock()(...(args as [string])),
       rpc: (...args: unknown[]) =>
         createRpcMock()(
-          ...(args as [string, { target_id: string; new_status: ProfileStatus }]),
+          ...(args as [
+            string,
+            {
+              target_id: string;
+              new_status?: ProfileStatus;
+              new_role?: "user" | "admin";
+            },
+          ]),
         ),
     };
   },
@@ -1356,6 +1414,7 @@ describe("mapRow and sort", () => {
       user_id: "user-1",
       due_date: "2026-09-20",
       priority: "high",
+      notes: "remember milk",
     };
     expect(mapRow(row)).toEqual({
       id: "a",
@@ -1363,6 +1422,7 @@ describe("mapRow and sort", () => {
       completed: false,
       due_date: "2026-09-20",
       priority: "high",
+      notes: "remember milk",
     });
   });
 
@@ -1381,6 +1441,7 @@ describe("mapRow and sort", () => {
       completed: true,
       due_date: null,
       priority: "none",
+      notes: null,
     });
   });
 
@@ -1392,6 +1453,7 @@ describe("mapRow and sort", () => {
         completed: false,
         due_date: null,
         priority: "high",
+        notes: null,
       },
       {
         id: "1",
@@ -1399,6 +1461,7 @@ describe("mapRow and sort", () => {
         completed: false,
         due_date: "2026-09-15",
         priority: "low",
+        notes: null,
       },
       {
         id: "2",
@@ -1406,6 +1469,7 @@ describe("mapRow and sort", () => {
         completed: false,
         due_date: "2026-09-15",
         priority: "high",
+        notes: null,
       },
       {
         id: "4",
@@ -1413,6 +1477,7 @@ describe("mapRow and sort", () => {
         completed: false,
         due_date: "2026-09-10",
         priority: "none",
+        notes: null,
       },
       {
         id: "5",
@@ -1420,6 +1485,7 @@ describe("mapRow and sort", () => {
         completed: false,
         due_date: null,
         priority: "none",
+        notes: null,
       },
     ];
     expect(sortTodos(items).map((t) => t.id)).toEqual([
@@ -1438,6 +1504,7 @@ describe("mapRow and sort", () => {
       completed: false,
       due_date: null,
       priority: "high",
+      notes: null,
     };
     const b: Todo = {
       id: "b",
@@ -1445,6 +1512,7 @@ describe("mapRow and sort", () => {
       completed: false,
       due_date: null,
       priority: "none",
+      notes: null,
     };
     expect(compareTodos(a, b)).toBeLessThan(0);
   });
@@ -1556,6 +1624,7 @@ describe("compact expand rows", () => {
         user_id: "user-1",
         due_date: "2026-09-22",
         priority: "low",
+        notes: null,
       },
       {
         id: "todo-a",
@@ -1564,6 +1633,7 @@ describe("compact expand rows", () => {
         user_id: "user-1",
         due_date: "2026-09-15",
         priority: "high",
+        notes: null,
       },
       {
         id: "todo-b",
@@ -1572,6 +1642,7 @@ describe("compact expand rows", () => {
         user_id: "user-1",
         due_date: "2026-09-15",
         priority: "low",
+        notes: null,
       },
       {
         id: "todo-c",
@@ -1580,6 +1651,7 @@ describe("compact expand rows", () => {
         user_id: "user-1",
         due_date: null,
         priority: "high",
+        notes: null,
       },
     ];
 
@@ -1708,6 +1780,380 @@ describe("compact expand rows", () => {
     expect(store).toHaveLength(1);
     expect(store[0].priority).toBe("none");
     expect(store[0].due_date).toBeNull();
+  });
+});
+
+
+describe("admin self-guard and roles", () => {
+  it("disables Approve and Reject on the current admin's own row", async () => {
+    const user = await renderAdmin();
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    const ownRow = screen.getByTestId("admin-profile-user-1");
+    expect(within(ownRow).getByTestId("approve-user-1")).toBeDisabled();
+    expect(within(ownRow).getByTestId("reject-user-1")).toBeDisabled();
+    expect(within(ownRow).getByTestId("remove-admin-user-1")).toBeDisabled();
+  });
+
+  it("does not call set_profile_status when Approve/Reject on self are clicked", async () => {
+    const pending: StoreProfile = {
+      id: "user-pending",
+      email: "waiter@example.com",
+      role: "user",
+      status: "pending",
+    };
+    const user = await renderAdmin([pending]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    const own = screen.getByTestId("admin-profile-user-1");
+    const before = profiles.find((p) => p.id === "user-1")!.status;
+    await user.click(within(own).getByRole("button", { name: /^approve$/i }));
+    await user.click(within(own).getByRole("button", { name: /^reject$/i }));
+    expect(profiles.find((p) => p.id === "user-1")!.status).toBe(before);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("surfaces set_profile_status RPC errors", async () => {
+    const pending: StoreProfile = {
+      id: "user-pending",
+      email: "waiter@example.com",
+      role: "user",
+      status: "pending",
+    };
+    const user = await renderAdmin([pending]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    // Make target vanish so RPC returns not found
+    profiles = profiles.filter((p) => p.id !== "user-pending");
+
+    const row = screen.getByTestId("admin-profile-user-pending");
+    await user.click(within(row).getByRole("button", { name: /^approve$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /profile not found/i,
+    );
+  });
+
+  it("shows Make admin only for approved users and calls set_profile_role", async () => {
+    const pending: StoreProfile = {
+      id: "user-pending",
+      email: "waiter@example.com",
+      role: "user",
+      status: "pending",
+    };
+    const approvedUser: StoreProfile = {
+      id: "user-approved",
+      email: "member@example.com",
+      role: "user",
+      status: "approved",
+    };
+    const user = await renderAdmin([pending, approvedUser]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    const pendingRow = screen.getByTestId("admin-profile-user-pending");
+    expect(
+      within(pendingRow).queryByRole("button", { name: /make admin/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(pendingRow).queryByRole("button", { name: /remove admin/i }),
+    ).not.toBeInTheDocument();
+
+    const approvedRow = screen.getByTestId("admin-profile-user-approved");
+    expect(
+      within(approvedRow).getByRole("button", { name: /make admin/i }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      within(approvedRow).getByRole("button", { name: /make admin/i }),
+    );
+
+    await waitFor(() => {
+      expect(profiles.find((p) => p.id === "user-approved")?.role).toBe("admin");
+    });
+    expect(
+      within(approvedRow).getByRole("button", { name: /remove admin/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides Make/Remove admin for rejected profiles", async () => {
+    const rejected: StoreProfile = {
+      id: "user-rejected",
+      email: "nope@example.com",
+      role: "user",
+      status: "rejected",
+    };
+    const user = await renderAdmin([rejected]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    const row = screen.getByTestId("admin-profile-user-rejected");
+    expect(
+      within(row).queryByRole("button", { name: /make admin/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(row).queryByRole("button", { name: /remove admin/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("cannot remove admin on self (button disabled)", async () => {
+    const peer: StoreProfile = {
+      id: "user-peer-admin",
+      email: "peer@example.com",
+      role: "admin",
+      status: "approved",
+    };
+    const user = await renderAdmin([peer]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    const own = screen.getByTestId("admin-profile-user-1");
+    expect(within(own).getByTestId("remove-admin-user-1")).toBeDisabled();
+
+    const peerRow = screen.getByTestId("admin-profile-user-peer-admin");
+    expect(
+      within(peerRow).getByRole("button", { name: /remove admin/i }),
+    ).not.toBeDisabled();
+
+    await user.click(
+      within(peerRow).getByRole("button", { name: /remove admin/i }),
+    );
+    await waitFor(() => {
+      expect(profiles.find((p) => p.id === "user-peer-admin")?.role).toBe("user");
+    });
+  });
+
+  it("surfaces set_profile_role RPC errors", async () => {
+    const approvedUser: StoreProfile = {
+      id: "user-approved",
+      email: "member@example.com",
+      role: "user",
+      status: "approved",
+    };
+    const user = await renderAdmin([approvedUser]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    // Force RPC failure by making target pending after load via direct mutate
+    // then clicking Make admin — update mock checks approved at call time.
+    profiles = profiles.map((p) =>
+      p.id === "user-approved" ? { ...p, status: "pending" as ProfileStatus } : p,
+    );
+
+    const row = screen.getByTestId("admin-profile-user-approved");
+    // UI still shows Make admin from stale state; click triggers RPC error
+    await user.click(within(row).getByRole("button", { name: /make admin/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /target must be approved/i,
+    );
+  });
+
+  it("surfaces last-admin demotion guard from set_profile_role", async () => {
+    const peer: StoreProfile = {
+      id: "user-peer-admin",
+      email: "peer@example.com",
+      role: "admin",
+      status: "approved",
+    };
+    const user = await renderAdmin([peer]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    // Simulate concurrent last-admin race: only peer remains approved admin
+    // in the mock DB while the stale UI still offers Remove admin.
+    profiles = profiles.map((p) =>
+      p.id === "user-1" ? { ...p, role: "user" as const } : p,
+    );
+
+    const peerRow = screen.getByTestId("admin-profile-user-peer-admin");
+    await user.click(
+      within(peerRow).getByRole("button", { name: /remove admin/i }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /cannot demote last approved admin/i,
+    );
+    expect(profiles.find((p) => p.id === "user-peer-admin")?.role).toBe("admin");
+  });
+
+  it("surfaces last-admin status guard from set_profile_status", async () => {
+    const peer: StoreProfile = {
+      id: "user-peer-admin",
+      email: "peer@example.com",
+      role: "admin",
+      status: "approved",
+    };
+    const user = await renderAdmin([peer]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    // Only peer remains as approved admin in the mock DB.
+    profiles = profiles.map((p) =>
+      p.id === "user-1"
+        ? { ...p, role: "user" as const, status: "rejected" as ProfileStatus }
+        : p,
+    );
+
+    const peerRow = screen.getByTestId("admin-profile-user-peer-admin");
+    await user.click(within(peerRow).getByRole("button", { name: /^reject$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /cannot change status of last approved admin/i,
+    );
+    expect(profiles.find((p) => p.id === "user-peer-admin")?.status).toBe(
+      "approved",
+    );
+  });
+});
+
+describe("todo notes modal", () => {
+  it("shows Notes button in expanded view and opens a modal", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Noted task");
+    const id = store[0].id;
+
+    await user.click(screen.getByRole("button", { name: /expand noted task/i }));
+    expect(screen.getByTestId(`notes-button-${id}`)).toBeInTheDocument();
+
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    expect(screen.getByTestId("notes-modal")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByTestId("notes-textarea")).toHaveFocus();
+  });
+
+  it("saves notes via todos update and closes the modal", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Persist notes");
+    const id = store[0].id;
+
+    await user.click(
+      screen.getByRole("button", { name: /expand persist notes/i }),
+    );
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    await user.type(screen.getByTestId("notes-textarea"), "side note");
+    await user.click(screen.getByTestId("notes-save"));
+
+    await waitFor(() => {
+      expect(store[0].notes).toBe("side note");
+    });
+    expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
+  });
+
+  it("cancels without saving notes", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Discard notes");
+    const id = store[0].id;
+
+    await user.click(
+      screen.getByRole("button", { name: /expand discard notes/i }),
+    );
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    await user.type(screen.getByTestId("notes-textarea"), "temporary");
+    await user.click(screen.getByTestId("notes-cancel"));
+
+    expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
+    expect(store[0].notes).toBeNull();
+  });
+
+  it("allows empty notes on save", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Empty notes");
+    const id = store[0].id;
+
+    await user.click(
+      screen.getByRole("button", { name: /expand empty notes/i }),
+    );
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    await user.type(screen.getByTestId("notes-textarea"), "temporary");
+    await user.click(screen.getByTestId("notes-save"));
+    await waitFor(() => {
+      expect(store[0].notes).toBe("temporary");
+    });
+    expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
+
+    // Row stays expanded after notes save — reopen modal and clear.
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    expect(screen.getByTestId("notes-textarea")).toHaveValue("temporary");
+    await user.clear(screen.getByTestId("notes-textarea"));
+    await user.click(screen.getByTestId("notes-save"));
+
+    await waitFor(() => {
+      expect(store[0].notes).toBeNull();
+    });
+  });
+
+  it("closes notes modal on Escape without collapsing expanded row", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Escape notes");
+    const id = store[0].id;
+
+    await user.click(
+      screen.getByRole("button", { name: /expand escape notes/i }),
+    );
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    expect(screen.getByTestId("notes-modal")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
+    expect(screen.getByTestId(`expanded-row-${id}`)).toBeInTheDocument();
+  });
+
+  it("closes notes modal when backdrop is clicked", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Backdrop notes");
+    const id = store[0].id;
+
+    await user.click(
+      screen.getByRole("button", { name: /expand backdrop notes/i }),
+    );
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    await user.click(screen.getByTestId("notes-modal-backdrop"));
+    expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
+  });
+
+  it("traps Tab focus inside the notes dialog and restores trigger focus", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Focus trap");
+    const id = store[0].id;
+
+    await user.click(
+      screen.getByRole("button", { name: /expand focus trap/i }),
+    );
+    const notesButton = screen.getByTestId(`notes-button-${id}`);
+    await user.click(notesButton);
+    expect(screen.getByTestId("notes-textarea")).toHaveFocus();
+    expect(document.body.style.overflow).toBe("hidden");
+
+    await user.tab();
+    expect(screen.getByTestId("notes-cancel")).toHaveFocus();
+    await user.tab();
+    expect(screen.getByTestId("notes-save")).toHaveFocus();
+    await user.tab();
+    expect(screen.getByTestId("notes-textarea")).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(screen.getByTestId("notes-save")).toHaveFocus();
+
+    await user.click(screen.getByTestId("notes-cancel"));
+    expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).not.toBe("hidden");
+    expect(notesButton).toHaveFocus();
+  });
+
+  it("trims notes on save and shows collapsed-row notes cue", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Trim notes");
+    const id = store[0].id;
+
+    await user.click(
+      screen.getByRole("button", { name: /expand trim notes/i }),
+    );
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    const textarea = screen.getByTestId("notes-textarea");
+    await user.clear(textarea);
+    await user.type(textarea, "  padded  ");
+    await user.click(screen.getByTestId("notes-save"));
+
+    await waitFor(() => {
+      expect(store[0].notes).toBe("padded");
+    });
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByTestId(`notes-indicator-${id}`)).toBeInTheDocument();
   });
 });
 
