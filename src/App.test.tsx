@@ -1242,6 +1242,113 @@ describe("compact expand rows", () => {
     expect(items[3]).toHaveAccessibleName("No date high");
   });
 
+
+  it("expands when the compact row is clicked, but not when the checkbox is clicked", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Row click me");
+
+    const row = screen.getByTestId(`compact-row-${store[0].id}`);
+    await user.click(row);
+
+    expect(screen.getByTestId(`expanded-row-${store[0].id}`)).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: /edit todo/i }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId(`expanded-row-${store[0].id}`),
+      ).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("checkbox", { name: "Row click me" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: "Row click me" }),
+      ).toBeChecked(),
+    );
+    expect(
+      screen.queryByTestId(`expanded-row-${store[0].id}`),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId(`compact-row-${store[0].id}`)).toBeInTheDocument();
+  });
+
+  it("collapses on Escape when focus is not in a date input", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Esc outside date");
+
+    await user.click(
+      screen.getByRole("button", { name: /expand esc outside date/i }),
+    );
+    const editInput = screen.getByRole("textbox", { name: /edit todo/i });
+    editInput.focus();
+    expect(document.activeElement).toBe(editInput);
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/due date/i)).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: /expand esc outside date/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not collapse on Escape while focus is in the due date input", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Esc in date");
+
+    await user.click(
+      screen.getByRole("button", { name: /expand esc in date/i }),
+    );
+    const dueInput = screen.getByLabelText(/due date/i);
+    dueInput.focus();
+    expect(document.activeElement).toBe(dueInput);
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByLabelText(/due date/i)).toBeInTheDocument();
+    expect(
+      screen.getByTestId(`expanded-row-${store[0].id}`),
+    ).toBeInTheDocument();
+  });
+
+  it("clears expandedId when clearCompleted removes the expanded completed todo", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Done expanded");
+    await addTodo(user, "Still open");
+    await user.click(screen.getByRole("checkbox", { name: "Done expanded" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: "Done expanded" }),
+      ).toBeChecked(),
+    );
+
+    const doneId = store.find((t) => t.text === "Done expanded")!.id;
+    await user.click(
+      screen.getByRole("button", { name: /expand done expanded/i }),
+    );
+    expect(screen.getByTestId(`expanded-row-${doneId}`)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /clear completed/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("checkbox", { name: "Done expanded" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId(`expanded-row-${doneId}`),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /edit todo/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Still open" }),
+    ).toBeInTheDocument();
+  });
+
   it("defaults new todos to priority none and null due_date", async () => {
     const user = await renderSignedIn();
     await addTodo(user, "Fresh");
