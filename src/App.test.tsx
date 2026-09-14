@@ -452,7 +452,7 @@ async function renderAdmin(extraProfiles: StoreProfile[] = []) {
   ];
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByTestId("admin-panel");
+  await screen.findByRole("button", { name: /^admin$/i });
   await screen.findByRole("textbox", { name: /new todo/i });
   return user;
 }
@@ -738,6 +738,45 @@ describe("approval gate", () => {
 });
 
 describe("admin panel", () => {
+  it("does not show the Admin button for non-admin users", async () => {
+    await renderSignedIn({ role: "user", status: "approved" });
+
+    expect(
+      screen.queryByRole("button", { name: /^admin$/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /admin approval/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the Admin button for admins with the panel closed by default", async () => {
+    await renderAdmin();
+
+    const toggle = screen.getByRole("button", { name: /^admin$/i });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+  });
+
+  it("toggles the admin panel open and closed", async () => {
+    const user = await renderAdmin();
+
+    const toggle = screen.getByRole("button", { name: /^admin$/i });
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("admin-panel")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /admin approval/i }),
+    ).toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+  });
+
   it("lets an admin approve a pending profile", async () => {
     const pending: StoreProfile = {
       id: "user-pending",
@@ -747,6 +786,7 @@ describe("admin panel", () => {
     };
     const user = await renderAdmin([pending]);
 
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
     expect(screen.getByTestId("admin-panel")).toBeInTheDocument();
     expect(
       await screen.findByText("waiter@example.com"),
@@ -768,6 +808,9 @@ describe("admin panel", () => {
   it("hides admin UI for non-admin users", async () => {
     await renderSignedIn({ role: "user", status: "approved" });
 
+    expect(
+      screen.queryByRole("button", { name: /^admin$/i }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: /admin approval/i }),
