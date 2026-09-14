@@ -777,6 +777,27 @@ describe("admin panel", () => {
     expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
   });
 
+  it("resets admin panel closed after sign-out", async () => {
+    const user = await renderAdmin();
+
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+    expect(screen.getByTestId("admin-panel")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /sign out/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^email$/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/^email$/i), "graywulf70@gmail.com");
+    await user.type(screen.getByLabelText(/^password$/i), "password123");
+    await user.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    const toggle = await screen.findByRole("button", { name: /^admin$/i });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+  });
+
   it("lets an admin approve a pending profile", async () => {
     const pending: StoreProfile = {
       id: "user-pending",

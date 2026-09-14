@@ -200,6 +200,7 @@ export default function App() {
         setTodos([]);
         setProfile(null);
         setAdminProfiles([]);
+        setAdminPanelOpen(false);
         setError(null);
         setAuthMessage(null);
         setDraft((current) => (current ? "" : current));
@@ -570,6 +571,7 @@ export default function App() {
     setTodos([]);
     setProfile(null);
     setAdminProfiles([]);
+    setAdminPanelOpen(false);
     setAuthMessage(null);
     setPassword("");
     setDraft("");
