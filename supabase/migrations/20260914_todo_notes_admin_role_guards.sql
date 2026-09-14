@@ -4,6 +4,8 @@
 --      cannot change status of last approved admin away from approved
 --   3. set_profile_role(target_id, new_role): admin-only; cannot change own role;
 --      only if target.status = approved; cannot demote last approved admin
+--   4. Last-admin checks lock approved-admin rows (FOR UPDATE) before count/update
+--      so concurrent demote/reject cannot both pass.
 -- Idempotent / safe to re-apply.
 
 ALTER TABLE public.todos
@@ -37,9 +39,11 @@ BEGIN
     RAISE EXCEPTION 'invalid status';
   END IF;
 
+  -- Lock target row before read/count/update so concurrent callers serialize.
   SELECT * INTO target_row
   FROM public.profiles
-  WHERE id = target_id;
+  WHERE id = target_id
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'profile not found';
@@ -49,6 +53,13 @@ BEGIN
   IF target_row.role = 'admin'::public.profile_role
      AND target_row.status = 'approved'::public.profile_status
      AND new_status IS DISTINCT FROM 'approved'::public.profile_status THEN
+    -- Lock all approved-admin rows before counting (aggregate FOR UPDATE is illegal).
+    PERFORM 1
+    FROM public.profiles p
+    WHERE p.role = 'admin'::public.profile_role
+      AND p.status = 'approved'::public.profile_status
+    FOR UPDATE;
+
     SELECT count(*)::integer INTO approved_admin_count
     FROM public.profiles p
     WHERE p.role = 'admin'::public.profile_role
@@ -104,9 +115,11 @@ BEGIN
     RAISE EXCEPTION 'invalid role';
   END IF;
 
+  -- Lock target row before read/count/update so concurrent callers serialize.
   SELECT * INTO target_row
   FROM public.profiles
-  WHERE id = target_id;
+  WHERE id = target_id
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'profile not found';
@@ -119,6 +132,12 @@ BEGIN
   -- Protect the last approved admin from demotion.
   IF target_row.role = 'admin'::public.profile_role
      AND new_role IS DISTINCT FROM 'admin'::public.profile_role THEN
+    PERFORM 1
+    FROM public.profiles p
+    WHERE p.role = 'admin'::public.profile_role
+      AND p.status = 'approved'::public.profile_status
+    FOR UPDATE;
+
     SELECT count(*)::integer INTO approved_admin_count
     FROM public.profiles p
     WHERE p.role = 'admin'::public.profile_role

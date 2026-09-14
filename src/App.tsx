@@ -156,7 +156,9 @@ export default function App() {
   const [editPriority, setEditPriority] = useState<TodoPriority>("none");
   const [notesTodoId, setNotesTodoId] = useState<string | null>(null);
   const [notesDraft, setNotesDraft] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
   const notesTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const notesDialogRef = useRef<HTMLDivElement | null>(null);
   /** Bumps when a todos load is superseded so stale responses are ignored. */
   const todosLoadGenerationRef = useRef(0);
   const profileLoadGenerationRef = useRef(0);
@@ -404,11 +406,13 @@ export default function App() {
   function closeNotesModal() {
     setNotesTodoId(null);
     setNotesDraft("");
+    setNotesSaving(false);
   }
 
   function openNotesModal(todo: Todo) {
     setNotesTodoId(todo.id);
     setNotesDraft(todo.notes ?? "");
+    setNotesSaving(false);
   }
 
   function collapseExpanded() {
@@ -435,9 +439,58 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (notesTodoId) {
+    if (!notesTodoId) return;
+
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const dialog = notesDialogRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    // Defer so the dialog nodes are mounted and focusable.
+    const focusTimer = window.setTimeout(() => {
       notesTextareaRef.current?.focus();
+    }, 0);
+
+    function focusableInDialog(): HTMLElement[] {
+      if (!dialog) return [];
+      const selector =
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+      return Array.from(dialog.querySelectorAll<HTMLElement>(selector)).filter(
+        (el) => !el.hasAttribute("disabled") && el.tabIndex !== -1,
+      );
     }
+
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Tab") return;
+      const focusables = focusableInDialog();
+      if (focusables.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey) {
+        if (active === first || (dialog && !dialog.contains(active))) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || (dialog && !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus?.();
+    };
   }, [notesTodoId]);
 
   useEffect(() => {
@@ -580,9 +633,11 @@ export default function App() {
   }
 
   async function saveNotes() {
-    if (!user || !supabase || !isApproved || !notesTodoId) return;
+    if (!user || !supabase || !isApproved || !notesTodoId || notesSaving) return;
+    setNotesSaving(true);
     setError(null);
-    const notesValue = notesDraft.trim() === "" ? null : notesDraft;
+    const trimmed = notesDraft.trim();
+    const notesValue = trimmed === "" ? null : trimmed;
     const { data, error: updateError } = await supabase
       .from("todos")
       .update({ notes: notesValue })
@@ -593,6 +648,7 @@ export default function App() {
 
     if (updateError) {
       setError(updateError.message);
+      setNotesSaving(false);
       return;
     }
 
@@ -1433,6 +1489,14 @@ export default function App() {
                                     {hint}
                                   </span>
                                 ) : null}
+                                {todo.notes ? (
+                                  <span
+                                    className="size-1.5 shrink-0 rounded-full bg-orange-700/80 dark:bg-orange-400/80"
+                                    data-testid={`notes-indicator-${todo.id}`}
+                                    title="Has notes"
+                                    aria-hidden="true"
+                                  />
+                                ) : null}
                               </button>
                             </div>
                           )}
@@ -1456,10 +1520,12 @@ export default function App() {
             type="button"
             aria-label="Close notes"
             data-testid="notes-modal-backdrop"
+            tabIndex={-1}
             className="absolute inset-0 bg-stone-900/50 dark:bg-black/60"
             onClick={closeNotesModal}
           />
           <div
+            ref={notesDialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="notes-modal-title"
@@ -1489,7 +1555,8 @@ export default function App() {
                 type="button"
                 data-testid="notes-cancel"
                 onClick={closeNotesModal}
-                className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 dark:border-stone-600 dark:text-stone-200"
+                disabled={notesSaving}
+                className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 disabled:opacity-60 dark:border-stone-600 dark:text-stone-200"
               >
                 Cancel
               </button>
@@ -1497,9 +1564,10 @@ export default function App() {
                 type="button"
                 data-testid="notes-save"
                 onClick={() => void saveNotes()}
-                className="rounded-lg bg-orange-800 px-3 py-2 text-sm font-semibold text-amber-50 dark:bg-orange-700"
+                disabled={notesSaving}
+                className="rounded-lg bg-orange-800 px-3 py-2 text-sm font-semibold text-amber-50 disabled:opacity-60 dark:bg-orange-700"
               >
-                Save
+                {notesSaving ? "Saving…" : "Save"}
               </button>
             </div>
           </div>

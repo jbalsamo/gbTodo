@@ -89,6 +89,12 @@ function fail(message: string) {
 }
 
 
+function approvedAdminCount() {
+  return profiles.filter(
+    (row) => row.role === "admin" && row.status === "approved",
+  ).length;
+}
+
 function createRpcMock() {
   return (
     fn: string,
@@ -106,7 +112,17 @@ function createRpcMock() {
       if (index < 0) {
         return fail("Profile not found");
       }
+      const target = profiles[index];
       const newStatus = args.new_status as ProfileStatus;
+      // Mirrors DB last-admin guard (race covered in SQL via FOR UPDATE).
+      if (
+        target.role === "admin" &&
+        target.status === "approved" &&
+        newStatus !== "approved" &&
+        approvedAdminCount() <= 1
+      ) {
+        return fail("cannot change status of last approved admin");
+      }
       profiles[index] = { ...profiles[index], status: newStatus };
       return ok(profiles[index]);
     }
@@ -122,6 +138,13 @@ function createRpcMock() {
         return fail("target must be approved");
       }
       const newRole = args.new_role as "user" | "admin";
+      if (
+        profiles[index].role === "admin" &&
+        newRole !== "admin" &&
+        approvedAdminCount() <= 1
+      ) {
+        return fail("cannot demote last approved admin");
+      }
       profiles[index] = { ...profiles[index], role: newRole };
       return ok(profiles[index]);
     }
@@ -1921,6 +1944,61 @@ describe("admin self-guard and roles", () => {
       /target must be approved/i,
     );
   });
+
+  it("surfaces last-admin demotion guard from set_profile_role", async () => {
+    const peer: StoreProfile = {
+      id: "user-peer-admin",
+      email: "peer@example.com",
+      role: "admin",
+      status: "approved",
+    };
+    const user = await renderAdmin([peer]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    // Simulate concurrent last-admin race: only peer remains approved admin
+    // in the mock DB while the stale UI still offers Remove admin.
+    profiles = profiles.map((p) =>
+      p.id === "user-1" ? { ...p, role: "user" as const } : p,
+    );
+
+    const peerRow = screen.getByTestId("admin-profile-user-peer-admin");
+    await user.click(
+      within(peerRow).getByRole("button", { name: /remove admin/i }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /cannot demote last approved admin/i,
+    );
+    expect(profiles.find((p) => p.id === "user-peer-admin")?.role).toBe("admin");
+  });
+
+  it("surfaces last-admin status guard from set_profile_status", async () => {
+    const peer: StoreProfile = {
+      id: "user-peer-admin",
+      email: "peer@example.com",
+      role: "admin",
+      status: "approved",
+    };
+    const user = await renderAdmin([peer]);
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+
+    // Only peer remains as approved admin in the mock DB.
+    profiles = profiles.map((p) =>
+      p.id === "user-1"
+        ? { ...p, role: "user" as const, status: "rejected" as ProfileStatus }
+        : p,
+    );
+
+    const peerRow = screen.getByTestId("admin-profile-user-peer-admin");
+    await user.click(within(peerRow).getByRole("button", { name: /^reject$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /cannot change status of last approved admin/i,
+    );
+    expect(profiles.find((p) => p.id === "user-peer-admin")?.status).toBe(
+      "approved",
+    );
+  });
 });
 
 describe("todo notes modal", () => {
@@ -2026,6 +2104,56 @@ describe("todo notes modal", () => {
     await user.click(screen.getByTestId(`notes-button-${id}`));
     await user.click(screen.getByTestId("notes-modal-backdrop"));
     expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
+  });
+
+  it("traps Tab focus inside the notes dialog and restores trigger focus", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Focus trap");
+    const id = store[0].id;
+
+    await user.click(
+      screen.getByRole("button", { name: /expand focus trap/i }),
+    );
+    const notesButton = screen.getByTestId(`notes-button-${id}`);
+    await user.click(notesButton);
+    expect(screen.getByTestId("notes-textarea")).toHaveFocus();
+    expect(document.body.style.overflow).toBe("hidden");
+
+    await user.tab();
+    expect(screen.getByTestId("notes-cancel")).toHaveFocus();
+    await user.tab();
+    expect(screen.getByTestId("notes-save")).toHaveFocus();
+    await user.tab();
+    expect(screen.getByTestId("notes-textarea")).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(screen.getByTestId("notes-save")).toHaveFocus();
+
+    await user.click(screen.getByTestId("notes-cancel"));
+    expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).not.toBe("hidden");
+    expect(notesButton).toHaveFocus();
+  });
+
+  it("trims notes on save and shows collapsed-row notes cue", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Trim notes");
+    const id = store[0].id;
+
+    await user.click(
+      screen.getByRole("button", { name: /expand trim notes/i }),
+    );
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    const textarea = screen.getByTestId("notes-textarea");
+    await user.clear(textarea);
+    await user.type(textarea, "  padded  ");
+    await user.click(screen.getByTestId("notes-save"));
+
+    await waitFor(() => {
+      expect(store[0].notes).toBe("padded");
+    });
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByTestId(`notes-indicator-${id}`)).toBeInTheDocument();
   });
 });
 
