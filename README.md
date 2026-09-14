@@ -92,7 +92,7 @@ After you have a deploy origin, add it to Supabase **Authentication → URL Conf
 - **Add** from **New todo** with **Add** or Enter. Whitespace-only input is ignored.
 - **Toggle** complete via the checkbox labeled by the todo text.
 - **Due date & priority** — optional `due_date` (YYYY-MM-DD) and `priority` (`none` | `low` | `medium` | `high`). New todos default to `none` / no due date; set them after expand. Incomplete list sorts by due date (soonest first, nulls last), then priority high→low, then id. See `supabase/migrations/20260913_todo_due_date_priority.sql`.
-- **Compact rows** — default row shows checkbox, truncated title, priority chip (if not none), and an overdue/due-soon hint. Click the row (not the checkbox) to expand; expanded view has due date, priority, edit text / save / cancel, and delete. Only one row expands at a time; Escape or Collapse closes it.
+- **Compact rows** — default row shows checkbox, truncated title, priority chip (if not none), and an overdue/due-soon hint. Click the row (not the checkbox) to expand; expanded view has due date, priority, edit text / save / cancel, and delete. Only one row expands at a time; Escape or Cancel closes it (Cancel clears edit drafts the same as collapsing).
 - **Edit** and **Delete** live in the expanded row; **Clear completed** when any completed todos exist.
 - **Filters**: All (default), Active, Completed.
 - Empty / loading / error states use accessible `status` / `alert` roles.

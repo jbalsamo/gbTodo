@@ -286,9 +286,16 @@ export default function App() {
   useEffect(() => {
     if (!expandedId) return;
     function onKey(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") {
-        collapseExpanded();
+      if (event.key !== "Escape") return;
+      const active = document.activeElement;
+      // Let Escape dismiss a native date picker first; collapse only otherwise.
+      if (
+        active instanceof HTMLInputElement &&
+        active.type === "date"
+      ) {
+        return;
       }
+      collapseExpanded();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -492,6 +499,9 @@ export default function App() {
   async function clearCompleted() {
     if (!user || !supabase) return;
     setError(null);
+    const expandedWasCompleted =
+      expandedId != null &&
+      todos.some((todo) => todo.id === expandedId && todo.completed);
     const { error: deleteError } = await supabase
       .from("todos")
       .delete()
@@ -504,6 +514,9 @@ export default function App() {
     }
 
     setTodos((list) => list.filter((todo) => !todo.completed));
+    if (expandedWasCompleted) {
+      collapseExpanded();
+    }
   }
 
   const controlClass =
@@ -874,14 +887,6 @@ export default function App() {
                                     </button>
                                     <button
                                       type="button"
-                                      aria-label={`Collapse ${todo.text}`}
-                                      onClick={collapseExpanded}
-                                      className="rounded-lg border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 dark:border-stone-600 dark:text-stone-200"
-                                    >
-                                      Collapse
-                                    </button>
-                                    <button
-                                      type="button"
                                       aria-label={`Delete ${todo.text}`}
                                       onClick={() => void deleteTodo(todo.id)}
                                       className="ml-auto rounded-lg px-3 py-2 text-sm font-medium text-red-800 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700 dark:text-red-300 dark:hover:bg-red-950/40 dark:focus-visible:ring-red-400"
@@ -898,6 +903,7 @@ export default function App() {
                                 todo.completed ? "opacity-70" : ""
                               }`}
                               data-testid={`compact-row-${todo.id}`}
+                              onClick={() => expandTodo(todo)}
                             >
                               <input
                                 type="checkbox"
@@ -914,7 +920,10 @@ export default function App() {
                                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
                                 aria-expanded={false}
                                 aria-label={`Expand ${todo.text}`}
-                                onClick={() => expandTodo(todo)}
+                                onClick={(event: MouseEvent) => {
+                                  event.stopPropagation();
+                                  expandTodo(todo);
+                                }}
                                 onKeyDown={(event) =>
                                   handleRowKeyDown(event, todo)
                                 }
