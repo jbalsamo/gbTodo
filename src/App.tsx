@@ -135,6 +135,7 @@ export default function App() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [adminProfiles, setAdminProfiles] = useState<Profile[]>([]);
   const [adminLoading, setAdminLoading] = useState(false);
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [todosLoading, setTodosLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +200,7 @@ export default function App() {
         setTodos([]);
         setProfile(null);
         setAdminProfiles([]);
+        setAdminPanelOpen(false);
         setError(null);
         setAuthMessage(null);
         setDraft((current) => (current ? "" : current));
@@ -569,6 +571,7 @@ export default function App() {
     setTodos([]);
     setProfile(null);
     setAdminProfiles([]);
+    setAdminPanelOpen(false);
     setAuthMessage(null);
     setPassword("");
     setDraft("");
@@ -776,6 +779,16 @@ export default function App() {
               </button>
             </>
           ) : null}
+          {isAdmin ? (
+            <button
+              type="button"
+              onClick={() => setAdminPanelOpen((open) => !open)}
+              aria-pressed={adminPanelOpen}
+              className={controlClass}
+            >
+              Admin
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => setDark((current) => !current)}
@@ -958,7 +971,7 @@ export default function App() {
               </div>
             ) : (
               <>
-                {isAdmin ? (
+                {isAdmin && adminPanelOpen ? (
                   <section
                     aria-label="Admin panel"
                     data-testid="admin-panel"
