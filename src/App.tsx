@@ -30,7 +30,18 @@ export type TodoRow = {
   priority: TodoPriority;
 };
 
+export type ProfileRole = "user" | "admin";
+export type ProfileStatus = "pending" | "approved" | "rejected";
+
+export type Profile = {
+  id: string;
+  email: string;
+  role: ProfileRole;
+  status: ProfileStatus;
+};
+
 const TODO_COLUMNS = "id, text, completed, user_id, due_date, priority";
+const PROFILE_COLUMNS = "id, email, role, status";
 
 const PRIORITY_RANK: Record<TodoPriority, number> = {
   none: 0,
@@ -120,6 +131,10 @@ function isBenignSignOutError(message: string): boolean {
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [adminProfiles, setAdminProfiles] = useState<Profile[]>([]);
+  const [adminLoading, setAdminLoading] = useState(false);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [todosLoading, setTodosLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +142,9 @@ export default function App() {
   const [filter, setFilter] = useState<Filter>("all");
   const [dark, setDark] = useState(false);
   const [email, setEmail] = useState("");
-  const [magicLinkStatus, setMagicLinkStatus] = useState<string | null>(null);
+  const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"signin" | "register">("signin");
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -135,8 +152,14 @@ export default function App() {
   const [editPriority, setEditPriority] = useState<TodoPriority>("none");
   /** Bumps when a todos load is superseded so stale responses are ignored. */
   const todosLoadGenerationRef = useRef(0);
+  const profileLoadGenerationRef = useRef(0);
 
   const user: User | null = session?.user ?? null;
+  const isApproved =
+    !!user &&
+    profile?.id === user.id &&
+    profile?.status === "approved";
+  const isAdmin = isApproved && profile?.role === "admin";
 
   useEffect(() => {
     const root = document.documentElement;
@@ -174,8 +197,10 @@ export default function App() {
       // secondary tab does not keep signed-in UI or stale errors.
       if (!nextSession) {
         setTodos([]);
+        setProfile(null);
+        setAdminProfiles([]);
         setError(null);
-        setMagicLinkStatus(null);
+        setAuthMessage(null);
         setDraft((current) => (current ? "" : current));
         setExpandedId(null);
         setEditDraft("");
@@ -193,9 +218,62 @@ export default function App() {
   // Depend on user id (not the User object) so getSession + onAuthStateChange
   // identity churn does not re-fetch todos hundreds of times.
   const userId = user?.id;
+  const profileId = profile?.id;
+  const profileStatus = profile?.status;
+  const profileRole = profile?.role;
 
+  // Load own profile after auth.
   useEffect(() => {
     if (!userId || !supabase) {
+      setProfile(null);
+      setProfileLoading(false);
+      return;
+    }
+
+    const client = supabase;
+    const requestedUserId = userId;
+    const requestId = ++profileLoadGenerationRef.current;
+
+    setProfile(null);
+    async function loadProfile() {
+      setProfileLoading(true);
+      const { data, error: loadError } = await client
+        .from("profiles")
+        .select(PROFILE_COLUMNS)
+        .eq("id", requestedUserId)
+        .maybeSingle();
+
+      if (requestId !== profileLoadGenerationRef.current) {
+        return;
+      }
+
+      if (loadError) {
+        setError(loadError.message);
+        setProfile(null);
+      } else {
+        setProfile((data as Profile | null) ?? null);
+      }
+      setProfileLoading(false);
+    }
+
+    void loadProfile();
+
+    return () => {
+      if (profileLoadGenerationRef.current === requestId) {
+        profileLoadGenerationRef.current += 1;
+      }
+      setProfileLoading(false);
+    };
+  }, [userId]);
+
+  // Todos only for approved users (profile must match the current session user).
+  useEffect(() => {
+    if (
+      !userId ||
+      !supabase ||
+      profileStatus !== "approved" ||
+      profileId !== userId
+    ) {
       setTodos([]);
       setTodosLoading(false);
       return;
@@ -243,7 +321,60 @@ export default function App() {
       // that starts a new load will set todosLoading true again immediately.
       setTodosLoading(false);
     };
-  }, [userId]);
+  }, [userId, profileId, profileStatus]);
+
+  // Admin profile list (approved admins only).
+  useEffect(() => {
+    if (
+      !userId ||
+      !supabase ||
+      profileId !== userId ||
+      profileStatus !== "approved" ||
+      profileRole !== "admin"
+    ) {
+      setAdminProfiles([]);
+      setAdminLoading(false);
+      return;
+    }
+
+    const client = supabase;
+    let cancelled = false;
+
+    async function loadAdminProfiles() {
+      setAdminLoading(true);
+      const { data, error: loadError } = await client
+        .from("profiles")
+        .select(PROFILE_COLUMNS);
+
+      if (cancelled) return;
+
+      if (loadError) {
+        setError(loadError.message);
+        setAdminProfiles([]);
+      } else {
+        const rows = (data ?? []) as Profile[];
+        // Pending first, then others (status enum order may vary; sort explicitly).
+        const rank: Record<ProfileStatus, number> = {
+          pending: 0,
+          approved: 1,
+          rejected: 2,
+        };
+        setAdminProfiles(
+          [...rows].sort((a, b) => {
+            const byStatus = rank[a.status] - rank[b.status];
+            if (byStatus !== 0) return byStatus;
+            return a.email.localeCompare(b.email);
+          }),
+        );
+      }
+      setAdminLoading(false);
+    }
+
+    void loadAdminProfiles();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, profileId, profileStatus, profileRole]);
 
   const filteredTodos = todos.filter((todo) => {
     if (filter === "active") return !todo.completed;
@@ -301,31 +432,88 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [expandedId]);
 
-  async function handleMagicLink(event: FormEvent<HTMLFormElement>) {
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase) return;
-    const trimmed = email.trim();
-    if (!trimmed) return;
+    const trimmedEmail = email.trim();
+    const trimmedPassword = password;
+    if (!trimmedEmail || !trimmedPassword) return;
 
     setAuthBusy(true);
-    setMagicLinkStatus(null);
+    setAuthMessage(null);
     setError(null);
 
-    const { error: otpError } = await supabase.auth.signInWithOtp({
-      email: trimmed,
-      options: {
-        emailRedirectTo: window.location.origin,
-      },
-    });
-
-    setAuthBusy(false);
-    if (otpError) {
-      setError(otpError.message);
+    if (authMode === "register") {
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: trimmedEmail,
+        password: trimmedPassword,
+      });
+      setAuthBusy(false);
+      if (signUpError) {
+        setError(signUpError.message);
+        return;
+      }
+      if (data.session) {
+        setSession(data.session);
+        setPassword("");
+        return;
+      }
+      setAuthMessage(
+        "Account created. If email confirmation is enabled, check your inbox; otherwise sign in with your password. New accounts await admin approval.",
+      );
+      setAuthMode("signin");
+      setPassword("");
       return;
     }
-    setMagicLinkStatus(
-      "Check your email for a magic link to sign in.",
-    );
+
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      email: trimmedEmail,
+      password: trimmedPassword,
+    });
+    setAuthBusy(false);
+    if (signInError) {
+      setError(signInError.message);
+      return;
+    }
+    setSession(data.session);
+    setPassword("");
+  }
+
+  async function updateProfileStatus(
+    profileId: string,
+    status: Extract<ProfileStatus, "approved" | "rejected">,
+  ) {
+    if (!supabase || !isAdmin) return;
+    setError(null);
+    const { data, error: updateError } = await supabase
+      .from("profiles")
+      .update({ status })
+      .eq("id", profileId)
+      .select(PROFILE_COLUMNS)
+      .single();
+
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+
+    const updated = data as Profile;
+    setAdminProfiles((list) => {
+      const next = list.map((row) => (row.id === profileId ? updated : row));
+      const rank: Record<ProfileStatus, number> = {
+        pending: 0,
+        approved: 1,
+        rejected: 2,
+      };
+      return [...next].sort((a, b) => {
+        const byStatus = rank[a.status] - rank[b.status];
+        if (byStatus !== 0) return byStatus;
+        return a.email.localeCompare(b.email);
+      });
+    });
+    if (profile?.id === profileId) {
+      setProfile(updated);
+    }
   }
 
   async function handleSignOut() {
@@ -381,7 +569,10 @@ export default function App() {
     // server session cannot leave the user stuck on the signed-in screen.
     setSession(null);
     setTodos([]);
-    setMagicLinkStatus(null);
+    setProfile(null);
+    setAdminProfiles([]);
+    setAuthMessage(null);
+    setPassword("");
     setDraft("");
     collapseExpanded();
 
@@ -392,7 +583,7 @@ export default function App() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!user || !supabase) return;
+    if (!user || !supabase || !isApproved) return;
 
     const text = draft.trim();
     if (!text) return;
@@ -420,7 +611,7 @@ export default function App() {
   }
 
   async function toggleTodo(id: string) {
-    if (!user || !supabase) return;
+    if (!user || !supabase || !isApproved) return;
     const current = todos.find((todo) => todo.id === id);
     if (!current) return;
 
@@ -445,7 +636,7 @@ export default function App() {
 
   async function saveExpanded(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!user || !expandedId || !supabase) return;
+    if (!user || !expandedId || !supabase || !isApproved) return;
 
     const text = editDraft.trim();
     if (!text) return;
@@ -479,7 +670,7 @@ export default function App() {
   }
 
   async function deleteTodo(id: string) {
-    if (!user || !supabase) return;
+    if (!user || !supabase || !isApproved) return;
     setError(null);
     const { error: deleteError } = await supabase
       .from("todos")
@@ -497,7 +688,7 @@ export default function App() {
   }
 
   async function clearCompleted() {
-    if (!user || !supabase) return;
+    if (!user || !supabase || !isApproved) return;
     setError(null);
     const expandedWasCompleted =
       expandedId != null &&
@@ -639,39 +830,94 @@ export default function App() {
               </p>
             ) : !user ? (
               <div className="space-y-4">
-                <form className="space-y-2" onSubmit={handleMagicLink}>
-                  <label
-                    htmlFor="magic-link-email"
-                    className="block text-sm font-medium text-stone-700 dark:text-stone-300"
+                <div
+                  role="tablist"
+                  aria-label="Authentication mode"
+                  className="flex rounded-xl bg-stone-200/80 p-1 dark:bg-[#1c120c]"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={authMode === "signin"}
+                    onClick={() => {
+                      setAuthMode("signin");
+                      setAuthMessage(null);
+                      setError(null);
+                    }}
+                    className={filterLabelClass(authMode === "signin")}
                   >
-                    Email
-                  </label>
-                  <div className="flex flex-col gap-2 sm:flex-row">
+                    Sign in
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={authMode === "register"}
+                    onClick={() => {
+                      setAuthMode("register");
+                      setAuthMessage(null);
+                      setError(null);
+                    }}
+                    className={filterLabelClass(authMode === "register")}
+                  >
+                    Register
+                  </button>
+                </div>
+                <form className="space-y-3" onSubmit={handleAuthSubmit}>
+                  <div>
+                    <label
+                      htmlFor="auth-email"
+                      className="block text-sm font-medium text-stone-700 dark:text-stone-300"
+                    >
+                      Email
+                    </label>
                     <input
-                      id="magic-link-email"
+                      id="auth-email"
                       type="email"
                       autoComplete="email"
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
                       placeholder="you@example.com"
                       required
-                      className="min-w-0 flex-1 rounded-xl border border-stone-300 bg-white px-4 py-3 text-base text-stone-900 placeholder:text-stone-400 outline-none transition focus:border-orange-800 focus:ring-2 focus:ring-orange-800/30 dark:border-stone-700 dark:bg-[#1c120c] dark:text-stone-100 dark:placeholder:text-stone-500 dark:focus:border-orange-400 dark:focus:ring-orange-400/30"
+                      className="mt-1 w-full rounded-xl border border-stone-300 bg-white px-4 py-3 text-base text-stone-900 placeholder:text-stone-400 outline-none transition focus:border-orange-800 focus:ring-2 focus:ring-orange-800/30 dark:border-stone-700 dark:bg-[#1c120c] dark:text-stone-100 dark:placeholder:text-stone-500 dark:focus:border-orange-400 dark:focus:ring-orange-400/30"
                     />
-                    <button
-                      type="submit"
-                      disabled={authBusy}
-                      className="rounded-xl bg-orange-800 px-4 py-3 text-sm font-semibold text-amber-50 shadow-lg shadow-orange-900/20 transition hover:bg-orange-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-700 disabled:opacity-60 dark:bg-orange-700 dark:hover:bg-orange-600 dark:focus-visible:ring-orange-400"
-                    >
-                      Send magic link
-                    </button>
                   </div>
+                  <div>
+                    <label
+                      htmlFor="auth-password"
+                      className="block text-sm font-medium text-stone-700 dark:text-stone-300"
+                    >
+                      Password
+                    </label>
+                    <input
+                      id="auth-password"
+                      type="password"
+                      autoComplete={
+                        authMode === "register"
+                          ? "new-password"
+                          : "current-password"
+                      }
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      placeholder="••••••••"
+                      required
+                      minLength={6}
+                      className="mt-1 w-full rounded-xl border border-stone-300 bg-white px-4 py-3 text-base text-stone-900 placeholder:text-stone-400 outline-none transition focus:border-orange-800 focus:ring-2 focus:ring-orange-800/30 dark:border-stone-700 dark:bg-[#1c120c] dark:text-stone-100 dark:placeholder:text-stone-500 dark:focus:border-orange-400 dark:focus:ring-orange-400/30"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={authBusy}
+                    className="w-full rounded-xl bg-orange-800 px-4 py-3 text-sm font-semibold text-amber-50 shadow-lg shadow-orange-900/20 transition hover:bg-orange-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-700 disabled:opacity-60 dark:bg-orange-700 dark:hover:bg-orange-600 dark:focus-visible:ring-orange-400"
+                  >
+                    {authMode === "register" ? "Create account" : "Sign in"}
+                  </button>
                 </form>
-                {magicLinkStatus ? (
+                {authMessage ? (
                   <p
                     role="status"
                     className="rounded-xl border border-stone-200 bg-white/70 px-4 py-3 text-sm text-stone-600 dark:border-stone-700 dark:bg-[#1c120c]/70 dark:text-stone-300"
                   >
-                    {magicLinkStatus}
+                    {authMessage}
                   </p>
                 ) : null}
                 {error ? (
@@ -683,8 +929,101 @@ export default function App() {
                   </p>
                 ) : null}
               </div>
+            ) : profileLoading || !profile ? (
+              <p
+                role="status"
+                className="rounded-xl border border-dashed border-stone-300 px-4 py-8 text-center text-stone-500 dark:border-stone-700 dark:text-stone-400"
+              >
+                {profileLoading ? "Loading account…" : "Account profile missing."}
+              </p>
+            ) : profile.status === "pending" || profile.status === "rejected" ? (
+              <div className="space-y-4" data-testid="account-status">
+                <p
+                  role="status"
+                  className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-6 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+                >
+                  {profile.status === "pending"
+                    ? "Your account is pending admin approval. You can sign out and return later."
+                    : "Your account was rejected. Contact an admin if you believe this is a mistake."}
+                </p>
+                <p className="text-sm text-stone-600 dark:text-stone-400">
+                  Status: <strong className="capitalize">{profile.status}</strong>
+                </p>
+                {error ? (
+                  <p
+                    role="alert"
+                    className="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+                  >
+                    {error}
+                  </p>
+                ) : null}
+              </div>
             ) : (
               <>
+                {isAdmin ? (
+                  <section
+                    aria-label="Admin panel"
+                    data-testid="admin-panel"
+                    className="mb-8 rounded-xl border border-orange-800/30 bg-white/60 p-4 dark:border-orange-700/40 dark:bg-[#1c120c]/60"
+                  >
+                    <h2 className="text-lg font-semibold text-stone-900 dark:text-amber-50">
+                      Admin approval
+                    </h2>
+                    <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
+                      Approve or reject pending registrations.
+                    </p>
+                    {adminLoading ? (
+                      <p role="status" className="mt-4 text-sm text-stone-500">
+                        Loading profiles…
+                      </p>
+                    ) : adminProfiles.length === 0 ? (
+                      <p role="status" className="mt-4 text-sm text-stone-500">
+                        No profiles found.
+                      </p>
+                    ) : (
+                      <ul className="mt-4 space-y-2">
+                        {adminProfiles.map((row) => (
+                          <li
+                            key={row.id}
+                            className="flex flex-col gap-2 rounded-lg border border-stone-200 bg-white/80 px-3 py-2 sm:flex-row sm:items-center dark:border-stone-700 dark:bg-[#1c120c]/80"
+                            data-testid={`admin-profile-${row.id}`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-medium text-stone-800 dark:text-stone-100">
+                                {row.email}
+                              </p>
+                              <p className="text-xs capitalize text-stone-500 dark:text-stone-400">
+                                {row.role} · {row.status}
+                              </p>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                disabled={row.status === "approved"}
+                                onClick={() =>
+                                  void updateProfileStatus(row.id, "approved")
+                                }
+                                className="rounded-lg bg-orange-800 px-3 py-1.5 text-xs font-semibold text-amber-50 disabled:opacity-40 dark:bg-orange-700"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                type="button"
+                                disabled={row.status === "rejected"}
+                                onClick={() =>
+                                  void updateProfileStatus(row.id, "rejected")
+                                }
+                                className="rounded-lg border border-stone-300 px-3 py-1.5 text-xs font-semibold text-stone-700 disabled:opacity-40 dark:border-stone-600 dark:text-stone-200"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                ) : null}
                 <form className="space-y-2" onSubmit={handleSubmit}>
                   <label
                     htmlFor="new-todo"
