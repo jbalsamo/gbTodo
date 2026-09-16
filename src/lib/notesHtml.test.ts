@@ -51,12 +51,28 @@ describe("notes HTML helpers", () => {
     );
   });
 
-  it("strips event-handler and href attributes from surviving tags", () => {
+  it("strips event-handler and unsafe style attrs from surviving tags", () => {
     const result = sanitizeNotesHtml(
       '<p onclick="alert(1)" style="color:red"><u data-x="1">hi</u></p>',
     );
     expect(result).toBe("<p><u>hi</u></p>");
-    expect(result).not.toMatch(/onclick|style|data-x|href/i);
+    expect(result).not.toMatch(/onclick|style|data-x|href|color/i);
+  });
+
+  it("preserves safe text-align styles and strips unsafe CSS", () => {
+    expect(
+      sanitizeNotesHtml('<p style="text-align: center">aligned</p>'),
+    ).toBe('<p style="text-align: center">aligned</p>');
+    expect(
+      sanitizeNotesHtml('<p style="text-align: right; color: red">x</p>'),
+    ).toBe('<p style="text-align: right">x</p>');
+    expect(
+      sanitizeNotesHtml('<p style="background:url(javascript:alert(1))">x</p>'),
+    ).toBe("<p>x</p>");
+    expect(sanitizeNotesHtml('<p align="center">legacy</p>')).toBe(
+      '<p align="center">legacy</p>',
+    );
+    expect(sanitizeNotesHtml('<p align="middle">nope</p>')).toBe("<p>nope</p>");
   });
 
   it("loads legacy plain text and existing HTML into the editor", () => {
