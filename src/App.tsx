@@ -333,7 +333,9 @@ export default function App() {
     };
   }, [userId, profileId, profileStatus]);
 
-  // Admin profile list (approved admins only).
+  // Admin profile list (approved admins only). Refetch when the panel opens
+  // so pending registrations appear without requiring re-login. Skip while
+  // closed so a toggle does not loop; in-flight work is cancelled on close.
   useEffect(() => {
     if (
       !userId ||
@@ -343,6 +345,11 @@ export default function App() {
       profileRole !== "admin"
     ) {
       setAdminProfiles([]);
+      setAdminLoading(false);
+      return;
+    }
+
+    if (!adminPanelOpen) {
       setAdminLoading(false);
       return;
     }
@@ -384,7 +391,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [userId, profileId, profileStatus, profileRole]);
+  }, [userId, profileId, profileStatus, profileRole, adminPanelOpen]);
 
   const filteredTodos = todos.filter((todo) => {
     if (filter === "active") return !todo.completed;
