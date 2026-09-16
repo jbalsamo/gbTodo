@@ -66,6 +66,8 @@ let authCallback: ((event: string, session: Session | null) => void) | null =
   null;
 let signedIn = true;
 let idCounter = 1;
+/** Count of profiles list selects (admin panel refetch), not maybeSingle. */
+let profileListSelectCount = 0;
 /** When set, the next insert().select().single() fails with this message. */
 let nextInsertError: string | null = null;
 /** When set, the next N todo selects wait until the matching resolvers run. */
@@ -160,6 +162,7 @@ function createFromMock() {
           const filters: Record<string, unknown> = {};
           const orders: Array<{ column: string; ascending: boolean }> = [];
           const finish = () => {
+            profileListSelectCount += 1;
             let rows = [...profiles];
             for (const [key, value] of Object.entries(filters)) {
               rows = rows.filter(
@@ -542,6 +545,7 @@ beforeEach(() => {
   store = [];
   profiles = [{ ...defaultProfile }];
   idCounter = 1;
+  profileListSelectCount = 0;
   authCallback = null;
   signedIn = true;
   nextInsertError = null;
@@ -894,6 +898,38 @@ describe("admin panel", () => {
     expect(
       screen.queryByRole("heading", { name: /admin approval/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("refetches profiles each time the Admin panel is opened", async () => {
+    const user = await renderAdmin();
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+    const selectsBeforeFirstOpen = profileListSelectCount;
+
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+    expect(screen.getByTestId("admin-panel")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(profileListSelectCount).toBeGreaterThan(selectsBeforeFirstOpen);
+    });
+    expect(await screen.findByTestId("admin-profile-user-1")).toBeInTheDocument();
+    const selectsAfterFirstOpen = profileListSelectCount;
+
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+    expect(screen.queryByTestId("admin-panel")).not.toBeInTheDocument();
+
+    const newPending: StoreProfile = {
+      id: "user-late-pending",
+      email: "latecomer@example.com",
+      role: "user",
+      status: "pending",
+    };
+    profiles = [...profiles, newPending];
+
+    await user.click(screen.getByRole("button", { name: /^admin$/i }));
+    expect(screen.getByTestId("admin-panel")).toBeInTheDocument();
+    expect(
+      await screen.findByText("latecomer@example.com"),
+    ).toBeInTheDocument();
+    expect(profileListSelectCount).toBeGreaterThan(selectsAfterFirstOpen);
   });
 });
 
