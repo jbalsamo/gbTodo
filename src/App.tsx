@@ -8,6 +8,8 @@ import {
 } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { NotesEditor } from "@/components/NotesEditor";
+import { isNotesEmpty, sanitizeNotesHtml } from "@/lib/notesHtml";
 
 export type TodoPriority = "none" | "low" | "medium" | "high";
 
@@ -157,7 +159,7 @@ export default function App() {
   const [notesTodoId, setNotesTodoId] = useState<string | null>(null);
   const [notesDraft, setNotesDraft] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
-  const notesTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const notesEditorFocusRef = useRef<HTMLElement | null>(null);
   const notesDialogRef = useRef<HTMLDivElement | null>(null);
   /** Bumps when a todos load is superseded so stale responses are ignored. */
   const todosLoadGenerationRef = useRef(0);
@@ -458,13 +460,13 @@ export default function App() {
 
     // Defer so the dialog nodes are mounted and focusable.
     const focusTimer = window.setTimeout(() => {
-      notesTextareaRef.current?.focus();
+      notesEditorFocusRef.current?.focus();
     }, 0);
 
     function focusableInDialog(): HTMLElement[] {
       if (!dialog) return [];
       const selector =
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
       return Array.from(dialog.querySelectorAll<HTMLElement>(selector)).filter(
         (el) => !el.hasAttribute("disabled") && el.tabIndex !== -1,
       );
@@ -643,8 +645,8 @@ export default function App() {
     if (!user || !supabase || !isApproved || !notesTodoId || notesSaving) return;
     setNotesSaving(true);
     setError(null);
-    const trimmed = notesDraft.trim();
-    const notesValue = trimmed === "" ? null : trimmed;
+    // public.todos.notes stores sanitized HTML; empty/whitespace-only → null.
+    const notesValue = sanitizeNotesHtml(notesDraft);
     const { data, error: updateError } = await supabase
       .from("todos")
       .update({ notes: notesValue })
@@ -1496,7 +1498,7 @@ export default function App() {
                                     {hint}
                                   </span>
                                 ) : null}
-                                {todo.notes ? (
+                                {!isNotesEmpty(todo.notes) ? (
                                   <span
                                     className="size-1.5 shrink-0 rounded-full bg-orange-700/80 dark:bg-orange-400/80"
                                     data-testid={`notes-indicator-${todo.id}`}
@@ -1545,17 +1547,15 @@ export default function App() {
             >
               Notes
             </h2>
-            <label htmlFor="notes-textarea" className="sr-only">
-              Todo notes
-            </label>
-            <textarea
-              id="notes-textarea"
-              ref={notesTextareaRef}
-              data-testid="notes-textarea"
-              value={notesDraft}
-              onChange={(event) => setNotesDraft(event.target.value)}
-              rows={6}
-              className="mt-3 w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 outline-none focus:border-orange-800 focus:ring-2 focus:ring-orange-800/30 dark:border-stone-700 dark:bg-[#2a1c14] dark:text-stone-100 dark:focus:border-orange-400"
+            <NotesEditor
+              key={notesTodoId}
+              initialContent={notesDraft}
+              disabled={notesSaving}
+              onReady={(el) => {
+                notesEditorFocusRef.current = el;
+                el?.focus();
+              }}
+              onChange={setNotesDraft}
             />
             <div className="mt-4 flex justify-end gap-2">
               <button

@@ -2038,48 +2038,52 @@ describe("admin self-guard and roles", () => {
 });
 
 describe("todo notes modal", () => {
-  it("shows Notes button in expanded view and opens a modal", async () => {
-    const user = await renderSignedIn();
-    await addTodo(user, "Noted task");
+  async function openNotes(
+    user: ReturnType<typeof userEvent.setup>,
+    todoText: string,
+  ) {
     const id = store[0].id;
-
-    await user.click(screen.getByRole("button", { name: /expand noted task/i }));
-    expect(screen.getByTestId(`notes-button-${id}`)).toBeInTheDocument();
-
-    await user.click(screen.getByTestId(`notes-button-${id}`));
-    expect(screen.getByTestId("notes-modal")).toBeInTheDocument();
-    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
-    expect(screen.getByTestId("notes-textarea")).toHaveFocus();
-  });
-
-  it("saves notes via todos update and closes the modal", async () => {
-    const user = await renderSignedIn();
-    await addTodo(user, "Persist notes");
-    const id = store[0].id;
-
     await user.click(
-      screen.getByRole("button", { name: /expand persist notes/i }),
+      screen.getByRole("button", { name: new RegExp(`expand ${todoText}`, "i") }),
     );
     await user.click(screen.getByTestId(`notes-button-${id}`));
-    await user.type(screen.getByTestId("notes-textarea"), "side note");
+    const editor = await screen.findByTestId("notes-editor");
+    return { id, editor };
+  }
+
+  it("shows Notes button in expanded view and opens a modal with the editor", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Noted task");
+    const { editor } = await openNotes(user, "noted task");
+
+    expect(screen.getByTestId("notes-modal")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByTestId("notes-toolbar")).toBeInTheDocument();
+    expect(screen.getByTestId("notes-bold")).toBeInTheDocument();
+    expect(editor).toHaveFocus();
+  });
+
+  it("saves notes as sanitized HTML and closes the modal", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Persist notes");
+    const { editor } = await openNotes(user, "persist notes");
+    await user.click(editor);
+    await user.keyboard("side note");
     await user.click(screen.getByTestId("notes-save"));
 
     await waitFor(() => {
-      expect(store[0].notes).toBe("side note");
+      expect(store[0].notes).toMatch(/side note/);
     });
+    expect(store[0].notes).toMatch(/<p>/);
     expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
   });
 
   it("cancels without saving notes", async () => {
     const user = await renderSignedIn();
     await addTodo(user, "Discard notes");
-    const id = store[0].id;
-
-    await user.click(
-      screen.getByRole("button", { name: /expand discard notes/i }),
-    );
-    await user.click(screen.getByTestId(`notes-button-${id}`));
-    await user.type(screen.getByTestId("notes-textarea"), "temporary");
+    const { editor } = await openNotes(user, "discard notes");
+    await user.click(editor);
+    await user.keyboard("temporary");
     await user.click(screen.getByTestId("notes-cancel"));
 
     expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
@@ -2089,23 +2093,21 @@ describe("todo notes modal", () => {
   it("allows empty notes on save", async () => {
     const user = await renderSignedIn();
     await addTodo(user, "Empty notes");
-    const id = store[0].id;
-
-    await user.click(
-      screen.getByRole("button", { name: /expand empty notes/i }),
-    );
-    await user.click(screen.getByTestId(`notes-button-${id}`));
-    await user.type(screen.getByTestId("notes-textarea"), "temporary");
+    const { id, editor } = await openNotes(user, "empty notes");
+    await user.click(editor);
+    await user.keyboard("temporary");
     await user.click(screen.getByTestId("notes-save"));
     await waitFor(() => {
-      expect(store[0].notes).toBe("temporary");
+      expect(store[0].notes).toMatch(/temporary/);
     });
     expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
 
     // Row stays expanded after notes save — reopen modal and clear.
     await user.click(screen.getByTestId(`notes-button-${id}`));
-    expect(screen.getByTestId("notes-textarea")).toHaveValue("temporary");
-    await user.clear(screen.getByTestId("notes-textarea"));
+    const reopened = await screen.findByTestId("notes-editor");
+    expect(reopened).toHaveTextContent("temporary");
+    await user.click(reopened);
+    await user.keyboard("{Control>}a{/Control}{Backspace}");
     await user.click(screen.getByTestId("notes-save"));
 
     await waitFor(() => {
@@ -2116,12 +2118,7 @@ describe("todo notes modal", () => {
   it("closes notes modal on Escape without collapsing expanded row", async () => {
     const user = await renderSignedIn();
     await addTodo(user, "Escape notes");
-    const id = store[0].id;
-
-    await user.click(
-      screen.getByRole("button", { name: /expand escape notes/i }),
-    );
-    await user.click(screen.getByTestId(`notes-button-${id}`));
+    const { id } = await openNotes(user, "escape notes");
     expect(screen.getByTestId("notes-modal")).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
@@ -2132,12 +2129,7 @@ describe("todo notes modal", () => {
   it("closes notes modal when backdrop is clicked", async () => {
     const user = await renderSignedIn();
     await addTodo(user, "Backdrop notes");
-    const id = store[0].id;
-
-    await user.click(
-      screen.getByRole("button", { name: /expand backdrop notes/i }),
-    );
-    await user.click(screen.getByTestId(`notes-button-${id}`));
+    await openNotes(user, "backdrop notes");
     await user.click(screen.getByTestId("notes-modal-backdrop"));
     expect(screen.queryByTestId("notes-modal")).not.toBeInTheDocument();
   });
@@ -2152,7 +2144,8 @@ describe("todo notes modal", () => {
     );
     const notesButton = screen.getByTestId(`notes-button-${id}`);
     await user.click(notesButton);
-    expect(screen.getByTestId("notes-textarea")).toHaveFocus();
+    const editor = await screen.findByTestId("notes-editor");
+    expect(editor).toHaveFocus();
     expect(document.body.style.overflow).toBe("hidden");
 
     await user.tab();
@@ -2160,7 +2153,7 @@ describe("todo notes modal", () => {
     await user.tab();
     expect(screen.getByTestId("notes-save")).toHaveFocus();
     await user.tab();
-    expect(screen.getByTestId("notes-textarea")).toHaveFocus();
+    expect(screen.getByTestId("notes-editor")).toHaveFocus();
     await user.tab({ shift: true });
     expect(screen.getByTestId("notes-save")).toHaveFocus();
 
@@ -2170,26 +2163,95 @@ describe("todo notes modal", () => {
     expect(notesButton).toHaveFocus();
   });
 
-  it("trims notes on save and shows collapsed-row notes cue", async () => {
+  it("saves formatted HTML and shows collapsed-row notes cue", async () => {
     const user = await renderSignedIn();
     await addTodo(user, "Trim notes");
-    const id = store[0].id;
-
-    await user.click(
-      screen.getByRole("button", { name: /expand trim notes/i }),
-    );
-    await user.click(screen.getByTestId(`notes-button-${id}`));
-    const textarea = screen.getByTestId("notes-textarea");
-    await user.clear(textarea);
-    await user.type(textarea, "  padded  ");
+    const { id, editor } = await openNotes(user, "trim notes");
+    await user.click(editor);
+    await user.keyboard("padded");
     await user.click(screen.getByTestId("notes-save"));
 
     await waitFor(() => {
-      expect(store[0].notes).toBe("padded");
+      expect(store[0].notes).toMatch(/padded/);
     });
+    expect(store[0].notes).toMatch(/<p>/);
 
     await user.keyboard("{Escape}");
     expect(screen.getByTestId(`notes-indicator-${id}`)).toBeInTheDocument();
+  });
+
+  it("stores null for empty HTML notes like <p></p>", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Blank html");
+    const { editor } = await openNotes(user, "blank html");
+    await user.click(editor);
+    await user.click(screen.getByTestId("notes-save"));
+
+    await waitFor(() => {
+      expect(store[0].notes).toBeNull();
+    });
+  });
+
+  it("applies toolbar bold and persists HTML", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Bold notes");
+    const { editor } = await openNotes(user, "bold notes");
+    await user.click(editor);
+    await user.click(screen.getByTestId("notes-bold"));
+    await user.keyboard("bold text");
+    await user.click(screen.getByTestId("notes-save"));
+
+    await waitFor(() => {
+      expect(store[0].notes).toMatch(/<strong>bold text<\/strong>/);
+    });
+  });
+
+  it("loads legacy plain-text notes and displays formatted HTML safely", async () => {
+    store = [
+      {
+        id: "todo-plain",
+        text: "Legacy notes",
+        completed: false,
+        user_id: "user-1",
+        due_date: null,
+        priority: "none",
+        notes: "remember milk",
+      },
+    ];
+    const user = await renderSignedIn();
+    await screen.findByRole("checkbox", { name: "Legacy notes" });
+    await user.click(
+      screen.getByRole("button", { name: /expand legacy notes/i }),
+    );
+    await user.click(screen.getByTestId("notes-button-todo-plain"));
+    const editor = await screen.findByTestId("notes-editor");
+    expect(editor).toHaveTextContent("remember milk");
+    expect(screen.queryByText(/<script>/i)).not.toBeInTheDocument();
+  });
+
+  it("sanitizes unsafe HTML when displaying saved notes", async () => {
+    store = [
+      {
+        id: "todo-html",
+        text: "Safe notes",
+        completed: false,
+        user_id: "user-1",
+        due_date: null,
+        priority: "none",
+        notes:
+          '<p><strong>keep</strong><script>alert(1)</script></p>',
+      },
+    ];
+    const user = await renderSignedIn();
+    await screen.findByRole("checkbox", { name: "Safe notes" });
+    await user.click(
+      screen.getByRole("button", { name: /expand safe notes/i }),
+    );
+    await user.click(screen.getByTestId("notes-button-todo-html"));
+    const editor = await screen.findByTestId("notes-editor");
+    expect(editor).toHaveTextContent("keep");
+    expect(editor.querySelector("script")).toBeNull();
+    expect(editor.querySelector("strong")).not.toBeNull();
   });
 });
 
