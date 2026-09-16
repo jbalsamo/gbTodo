@@ -2060,6 +2060,17 @@ describe("todo notes modal", () => {
     expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
     expect(screen.getByTestId("notes-toolbar")).toBeInTheDocument();
     expect(screen.getByTestId("notes-bold")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^bold$/i })).toHaveAttribute(
+      "aria-label",
+      "Bold",
+    );
+    expect(screen.getByRole("button", { name: /^italic$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^underline$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^bullet list$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^numbered list$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^align left$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^align center$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^align right$/i })).toBeInTheDocument();
     expect(editor).toHaveFocus();
   });
 
@@ -2232,6 +2243,55 @@ describe("todo notes modal", () => {
 
     await waitFor(() => {
       expect(store[0].notes).toMatch(/<em>italic text<\/em>/);
+    });
+  });
+
+  it("toggles aria-pressed on toolbar mark buttons when active", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Pressed marks");
+    const { editor } = await openNotes(user, "pressed marks");
+    const bold = screen.getByTestId("notes-bold");
+    const italic = screen.getByTestId("notes-italic");
+    expect(bold).toHaveAttribute("aria-pressed", "false");
+    expect(italic).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(editor);
+    await user.click(bold);
+    await user.click(italic);
+    await waitFor(() => {
+      expect(bold).toHaveAttribute("aria-pressed", "true");
+      expect(italic).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+
+  it("applies toolbar alignment and persists through save sanitize round-trip", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Align notes");
+    const { id, editor } = await openNotes(user, "align notes");
+    await user.click(editor);
+    await user.keyboard("centered");
+    await user.click(screen.getByTestId("notes-align-center"));
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-align-center")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+    await user.click(screen.getByTestId("notes-save"));
+
+    await waitFor(() => {
+      expect(store[0].notes).toMatch(/text-align:\s*center/i);
+      expect(store[0].notes).toMatch(/centered/);
+    });
+
+    await user.click(screen.getByTestId(`notes-button-${id}`));
+    const reopened = await screen.findByTestId("notes-editor");
+    expect(reopened).toHaveTextContent("centered");
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-align-center")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
     });
   });
 

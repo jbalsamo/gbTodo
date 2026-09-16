@@ -5,6 +5,7 @@ import DOMPurify from "dompurify";
  * Empty / whitespace-only content (including empty tags like `<p></p>`) is stored as null.
  *
  * Links are not supported in the TipTap editor (`link: false`), so `<a>` is not allowlisted.
+ * TipTap TextAlign stores alignment as `style="text-align: …"` on paragraphs/headings.
  */
 
 const ALLOWED_TAGS = new Set([
@@ -18,6 +19,12 @@ const ALLOWED_TAGS = new Set([
   "UL",
   "OL",
   "LI",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
 ]);
 
 const DROP_TAGS = new Set([
@@ -54,7 +61,41 @@ const DOMPURIFY_TAGS = [
   "ul",
   "ol",
   "li",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
 ];
+
+const SAFE_TEXT_ALIGN = new Set(["left", "center", "right", "justify"]);
+
+/** Keep only safe `text-align` declarations from a style attribute. */
+export function sanitizeStyleAttr(style: string): string | null {
+  const kept: string[] = [];
+  for (const part of style.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const colon = trimmed.indexOf(":");
+    if (colon < 0) continue;
+    const prop = trimmed.slice(0, colon).trim().toLowerCase();
+    const value = trimmed
+      .slice(colon + 1)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    if (prop === "text-align" && SAFE_TEXT_ALIGN.has(value)) {
+      kept.push(`text-align: ${value}`);
+    }
+  }
+  return kept.length > 0 ? kept.join("; ") : null;
+}
+
+function sanitizeAlignAttr(value: string): string | null {
+  const v = value.trim().toLowerCase();
+  return SAFE_TEXT_ALIGN.has(v) ? v : null;
+}
 
 /** Allowlist walker — happy-dom fallback when DOMPurify is unreliable. */
 function sanitizeWithAllowlist(html: string): string {
@@ -98,9 +139,21 @@ function sanitizeElement(parent: Element) {
       continue;
     }
 
-    // No attributes are allowlisted for notes markup (no links).
+    // Only safe text-align style / align attr survive on block tags.
+    const safeStyle = el.getAttribute("style")
+      ? sanitizeStyleAttr(el.getAttribute("style")!)
+      : null;
+    const safeAlign = el.getAttribute("align")
+      ? sanitizeAlignAttr(el.getAttribute("align")!)
+      : null;
     for (const attr of Array.from(el.attributes)) {
       el.removeAttribute(attr.name);
+    }
+    if (safeStyle) {
+      el.setAttribute("style", safeStyle);
+    }
+    if (safeAlign) {
+      el.setAttribute("align", safeAlign);
     }
     sanitizeElement(el);
     child = next;
@@ -117,10 +170,12 @@ function isDomPurifyReliable(): boolean {
 /** Prefer DOMPurify when reliable; fall back to the allowlist walker in happy-dom. */
 function sanitizeHtml(html: string): string {
   if (isDomPurifyReliable()) {
-    return DOMPurify.sanitize(html, {
+    const cleaned = DOMPurify.sanitize(html, {
       ALLOWED_TAGS: DOMPURIFY_TAGS,
-      ALLOWED_ATTR: [],
+      ALLOWED_ATTR: ["style", "align"],
     });
+    // DOMPurify may leave unsafe CSS; re-walk to keep only text-align / align.
+    return sanitizeWithAllowlist(cleaned);
   }
   return sanitizeWithAllowlist(html);
 }
