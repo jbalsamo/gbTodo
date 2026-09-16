@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
+import Underline from "@tiptap/extension-underline";
 import StarterKit from "@tiptap/starter-kit";
 import { notesToEditorContent } from "@/lib/notesHtml";
 
@@ -38,7 +39,10 @@ export function NotesEditor({
         horizontalRule: false,
         code: false,
         link: false,
+        // Underline is wired explicitly via @tiptap/extension-underline below.
+        underline: false,
       }),
+      Underline,
     ],
     content: notesToEditorContent(initialContent),
     editable: !disabled,

@@ -2206,6 +2206,35 @@ describe("todo notes modal", () => {
     });
   });
 
+  it("applies toolbar underline and persists HTML", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Underline notes");
+    const { editor } = await openNotes(user, "underline notes");
+    expect(screen.getByTestId("notes-underline")).toBeInTheDocument();
+    await user.click(editor);
+    await user.click(screen.getByTestId("notes-underline"));
+    await user.keyboard("under text");
+    await user.click(screen.getByTestId("notes-save"));
+
+    await waitFor(() => {
+      expect(store[0].notes).toMatch(/<u>under text<\/u>/);
+    });
+  });
+
+  it("applies toolbar italic and persists HTML", async () => {
+    const user = await renderSignedIn();
+    await addTodo(user, "Italic notes");
+    const { editor } = await openNotes(user, "italic notes");
+    await user.click(editor);
+    await user.click(screen.getByTestId("notes-italic"));
+    await user.keyboard("italic text");
+    await user.click(screen.getByTestId("notes-save"));
+
+    await waitFor(() => {
+      expect(store[0].notes).toMatch(/<em>italic text<\/em>/);
+    });
+  });
+
   it("loads legacy plain-text notes and displays formatted HTML safely", async () => {
     store = [
       {

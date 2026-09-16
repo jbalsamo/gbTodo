@@ -3,6 +3,8 @@ import DOMPurify from "dompurify";
 /**
  * Notes are stored in public.todos.notes as sanitized HTML (not plain text).
  * Empty / whitespace-only content (including empty tags like `<p></p>`) is stored as null.
+ *
+ * Links are not supported in the TipTap editor (`link: false`), so `<a>` is not allowlisted.
  */
 
 const ALLOWED_TAGS = new Set([
@@ -16,7 +18,6 @@ const ALLOWED_TAGS = new Set([
   "UL",
   "OL",
   "LI",
-  "A",
 ]);
 
 const DROP_TAGS = new Set([
@@ -42,10 +43,6 @@ const DROP_TAGS = new Set([
   "SELECT",
 ]);
 
-const ALLOWED_ATTR: Record<string, Set<string>> = {
-  A: new Set(["href", "target", "rel"]),
-};
-
 const DOMPURIFY_TAGS = [
   "p",
   "br",
@@ -57,22 +54,9 @@ const DOMPURIFY_TAGS = [
   "ul",
   "ol",
   "li",
-  "a",
 ];
 
-const DOMPURIFY_ATTR = ["href", "target", "rel"];
-
-function dropUnsafeHref(el: Element) {
-  const href = el.getAttribute("href") ?? "";
-  if (!/^(https?:|mailto:|#)/i.test(href)) {
-    el.removeAttribute("href");
-  }
-  if (el.getAttribute("target") === "_blank") {
-    el.setAttribute("rel", "noopener noreferrer");
-  }
-}
-
-/** Allowlist walker — works in the browser and in happy-dom (DOMPurify does not). */
+/** Allowlist walker — happy-dom fallback when DOMPurify is unreliable. */
 function sanitizeWithAllowlist(html: string): string {
   const root = document.createElement("div");
   root.innerHTML = html;
@@ -114,27 +98,31 @@ function sanitizeElement(parent: Element) {
       continue;
     }
 
+    // No attributes are allowlisted for notes markup (no links).
     for (const attr of Array.from(el.attributes)) {
-      const allowed = ALLOWED_ATTR[tag];
-      if (!allowed || !allowed.has(attr.name.toLowerCase())) {
-        el.removeAttribute(attr.name);
-      }
+      el.removeAttribute(attr.name);
     }
-    if (tag === "A") dropUnsafeHref(el);
     sanitizeElement(el);
     child = next;
   }
 }
 
-function purifyIfReliable(html: string): string {
-  if (typeof window === "undefined" || !DOMPurify.isSupported) return html;
+function isDomPurifyReliable(): boolean {
+  if (typeof window === "undefined" || !DOMPurify.isSupported) return false;
   const probe = DOMPurify.sanitize("<p>x</p>", { ALLOWED_TAGS: ["p"] });
   // happy-dom's HTML pipeline is incompatible with DOMPurify (drops `<p>`, keeps `<script>`).
-  if (!probe.includes("<p>")) return html;
-  return DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: DOMPURIFY_TAGS,
-    ALLOWED_ATTR: DOMPURIFY_ATTR,
-  });
+  return probe.includes("<p>");
+}
+
+/** Prefer DOMPurify when reliable; fall back to the allowlist walker in happy-dom. */
+function sanitizeHtml(html: string): string {
+  if (isDomPurifyReliable()) {
+    return DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: DOMPURIFY_TAGS,
+      ALLOWED_ATTR: [],
+    });
+  }
+  return sanitizeWithAllowlist(html);
 }
 
 /**
@@ -145,7 +133,7 @@ export function sanitizeNotesHtml(
   html: string | null | undefined,
 ): string | null {
   if (html == null) return null;
-  const cleaned = purifyIfReliable(sanitizeWithAllowlist(html)).trim();
+  const cleaned = sanitizeHtml(html).trim();
   if (cleaned === "" || isNotesEmpty(cleaned)) return null;
   return cleaned;
 }
