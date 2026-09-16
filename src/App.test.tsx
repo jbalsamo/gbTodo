@@ -34,6 +34,11 @@ type StoreProfile = {
   email: string;
   role: "user" | "admin";
   status: ProfileStatus;
+  settings?: {
+    theme?: "light" | "dark";
+    filter?: "all" | "active" | "completed";
+    [key: string]: unknown;
+  };
 };
 
 const mockUser: User = {
@@ -58,6 +63,7 @@ const defaultProfile: StoreProfile = {
   email: "tester@example.com",
   role: "user",
   status: "approved",
+  settings: {},
 };
 
 let store: StoreTodo[] = [];
@@ -158,6 +164,43 @@ function createFromMock() {
   return (table: string) => {
     if (table === "profiles") {
       return {
+        update(patch: Partial<StoreProfile>) {
+          const filters: Record<string, unknown> = {};
+          const builder = {
+            eq(column: string, value: unknown) {
+              filters[column] = value;
+              return builder;
+            },
+            then(
+              onFulfilled: (value: unknown) => unknown,
+              onRejected?: (reason: unknown) => unknown,
+            ) {
+              const index = profiles.findIndex((row) =>
+                Object.entries(filters).every(
+                  ([key, value]) =>
+                    (row as Record<string, unknown>)[key] === value,
+                ),
+              );
+              if (index < 0) {
+                return fail("Profile not found").then(onFulfilled, onRejected);
+              }
+              const nextSettings =
+                patch.settings !== undefined
+                  ? {
+                      ...(profiles[index].settings ?? {}),
+                      ...patch.settings,
+                    }
+                  : profiles[index].settings;
+              profiles[index] = {
+                ...profiles[index],
+                ...patch,
+                settings: nextSettings,
+              };
+              return ok(profiles[index]).then(onFulfilled, onRejected);
+            },
+          };
+          return builder;
+        },
         select(_columns?: string) {
           const filters: Record<string, unknown> = {};
           const orders: Array<{ column: string; ascending: boolean }> = [];
@@ -2374,5 +2417,85 @@ describe("missing supabase config", () => {
     render(<App />);
     await screen.findByRole("alert");
     expect(screen.queryByText(/checking session/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("user settings persistence", () => {
+  it("applies saved theme and filter when an approved profile loads", async () => {
+    await renderSignedIn({
+      settings: { theme: "dark", filter: "completed" },
+    });
+
+    expect(document.documentElement).toHaveClass("dark");
+    expect(
+      screen.getByRole("button", { name: /switch to light mode/i }),
+    ).toBeInTheDocument();
+
+    const filter = getFilterControl();
+    expect(filter).toBeInTheDocument();
+    expect(
+      within(filter!).getByRole("radio", { name: /^completed$/i }),
+    ).toBeChecked();
+  });
+
+  it("defaults to light theme and all filter when settings are missing", async () => {
+    await renderSignedIn({ settings: {} });
+
+    expect(document.documentElement).not.toHaveClass("dark");
+    const filter = getFilterControl();
+    expect(filter).toBeInTheDocument();
+    expect(within(filter!).getByRole("radio", { name: /^all$/i })).toBeChecked();
+  });
+
+  it("persists theme toggle with merged settings for approved users", async () => {
+    const user = await renderSignedIn({
+      settings: { theme: "light", filter: "active", customKey: "keep-me" },
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /switch to dark mode/i }),
+    );
+
+    await waitFor(() => {
+      expect(profiles[0].settings).toEqual({
+        theme: "dark",
+        filter: "active",
+        customKey: "keep-me",
+      });
+    });
+    expect(document.documentElement).toHaveClass("dark");
+  });
+
+  it("persists filter change with merged settings for approved users", async () => {
+    const user = await renderSignedIn({
+      settings: { theme: "dark", filter: "all", customKey: "keep-me" },
+    });
+
+    const filter = getFilterControl();
+    expect(filter).toBeInTheDocument();
+    await user.click(within(filter!).getByRole("radio", { name: /^active$/i }));
+
+    await waitFor(() => {
+      expect(profiles[0].settings).toEqual({
+        theme: "dark",
+        filter: "active",
+        customKey: "keep-me",
+      });
+    });
+    expect(
+      within(filter!).getByRole("radio", { name: /^active$/i }),
+    ).toBeChecked();
+  });
+
+  it("does not cloud-save theme for pending users", async () => {
+    const user = await renderPending("pending");
+    profiles[0].settings = { theme: "light" };
+
+    await user.click(
+      screen.getByRole("button", { name: /switch to dark mode/i }),
+    );
+
+    expect(document.documentElement).toHaveClass("dark");
+    expect(profiles[0].settings).toEqual({ theme: "light" });
   });
 });

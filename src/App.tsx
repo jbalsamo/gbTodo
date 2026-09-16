@@ -37,15 +37,21 @@ export type TodoRow = {
 export type ProfileRole = "user" | "admin";
 export type ProfileStatus = "pending" | "approved" | "rejected";
 
+export type ProfileSettings = {
+  theme?: "light" | "dark";
+  filter?: Filter;
+};
+
 export type Profile = {
   id: string;
   email: string;
   role: ProfileRole;
   status: ProfileStatus;
+  settings: ProfileSettings;
 };
 
 const TODO_COLUMNS = "id, text, completed, user_id, due_date, priority, notes";
-const PROFILE_COLUMNS = "id, email, role, status";
+const PROFILE_COLUMNS = "id, email, role, status, settings";
 
 const PRIORITY_RANK: Record<TodoPriority, number> = {
   none: 0,
@@ -263,7 +269,21 @@ export default function App() {
         setError(loadError.message);
         setProfile(null);
       } else {
-        setProfile((data as Profile | null) ?? null);
+        const loaded = (data as Profile | null) ?? null;
+        setProfile(
+          loaded
+            ? { ...loaded, settings: loaded.settings ?? {} }
+            : null,
+        );
+        if (loaded?.status === "approved") {
+          const settings = loaded.settings ?? {};
+          setDark(settings.theme === "dark");
+          setFilter(
+            settings.filter === "active" || settings.filter === "completed"
+              ? settings.filter
+              : "all",
+          );
+        }
       }
       setProfileLoading(false);
     }
@@ -395,7 +415,34 @@ export default function App() {
     };
   }, [userId, profileId, profileStatus, profileRole, adminPanelOpen]);
 
-  const filteredTodos = todos.filter((todo) => {
+  async function persistSettings(patch: ProfileSettings) {
+    if (!isApproved || !supabase || !userId) return;
+    const next = { ...(profile?.settings ?? {}), ...patch };
+    const { error: saveError } = await supabase
+      .from("profiles")
+      .update({ settings: next })
+      .eq("id", userId);
+    if (saveError) {
+      setError(saveError.message);
+      return;
+    }
+    setProfile((current) =>
+      current ? { ...current, settings: next } : current,
+    );
+  }
+
+  function toggleTheme() {
+    const nextDark = !dark;
+    setDark(nextDark);
+    void persistSettings({ theme: nextDark ? "dark" : "light" });
+  }
+
+  function changeFilter(next: Filter) {
+    setFilter(next);
+    void persistSettings({ filter: next });
+  }
+
+    const filteredTodos = todos.filter((todo) => {
     if (filter === "active") return !todo.completed;
     if (filter === "completed") return todo.completed;
     return true;
@@ -944,7 +991,7 @@ export default function App() {
           ) : null}
           <button
             type="button"
-            onClick={() => setDark((current) => !current)}
+            onClick={toggleTheme}
             aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
             className={controlClass}
           >
@@ -1258,7 +1305,7 @@ export default function App() {
                       name="todo-filter"
                       value="all"
                       checked={filter === "all"}
-                      onChange={() => setFilter("all")}
+                      onChange={() => changeFilter("all")}
                       className="sr-only"
                     />
                     All
@@ -1269,7 +1316,7 @@ export default function App() {
                       name="todo-filter"
                       value="active"
                       checked={filter === "active"}
-                      onChange={() => setFilter("active")}
+                      onChange={() => changeFilter("active")}
                       className="sr-only"
                     />
                     Active
@@ -1280,7 +1327,7 @@ export default function App() {
                       name="todo-filter"
                       value="completed"
                       checked={filter === "completed"}
-                      onChange={() => setFilter("completed")}
+                      onChange={() => changeFilter("completed")}
                       className="sr-only"
                     />
                     Completed
