@@ -22,11 +22,19 @@ type NotesEditorProps = {
   onChange: (html: string) => void;
 };
 
-const toolbarBtnClass =
-  "inline-flex h-8 w-8 items-center justify-center rounded-md border border-stone-300 bg-stone-50 text-stone-800 disabled:opacity-50 dark:border-stone-600 dark:bg-[#2a1c14] dark:text-amber-50";
+/** Shared idle/pressed styles for every notes toolbar control (no per-button color drift). */
+const toolbarBtnBaseClass =
+  "inline-flex h-8 w-8 items-center justify-center rounded-md border shadow-sm transition disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-800 dark:focus-visible:ring-orange-400";
 
-const toolbarBtnActiveClass =
-  "border-orange-800 bg-orange-800 text-white dark:border-orange-400 dark:bg-orange-400 dark:text-stone-950";
+const toolbarBtnIdleClass =
+  "border-stone-400 bg-stone-100 text-stone-950 hover:bg-amber-50 dark:border-stone-600 dark:bg-[#2a1c14] dark:text-amber-50 dark:hover:bg-[#3d2a1f]";
+
+const toolbarBtnPressedClass =
+  "border-orange-900 bg-orange-800 text-amber-50 hover:bg-orange-700 dark:border-orange-300 dark:bg-orange-400 dark:text-stone-950 dark:hover:bg-orange-300";
+
+function toolbarBtnClass(pressed: boolean) {
+  return `${toolbarBtnBaseClass} ${pressed ? toolbarBtnPressedClass : toolbarBtnIdleClass}`;
+}
 
 type ToolbarButtonProps = {
   testId: string;
@@ -54,7 +62,7 @@ function ToolbarButton({
       aria-label={label}
       aria-pressed={pressed}
       title={label}
-      className={`${toolbarBtnClass} ${pressed ? toolbarBtnActiveClass : ""}`}
+      className={toolbarBtnClass(pressed)}
       onClick={onClick}
     >
       {children}
